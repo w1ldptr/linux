@@ -2772,7 +2772,7 @@ int __init ip_mr_init(void)
 	}
 #endif
 	rtnl_register(RTNL_FAMILY_IPMR, RTM_GETROUTE,
-		      NULL, ipmr_rtm_dumproute, NULL);
+		      NULL, ipmr_rtm_dumproute, 0);
 	return 0;
 
 #ifdef CONFIG_IP_PIMSM_V2
