@@ -117,6 +117,7 @@ EXPORT_SYMBOL(lockdep_rtnl_is_held);
 #endif /* #ifdef CONFIG_PROVE_LOCKING */
 
 static struct rtnl_link *rtnl_msg_handlers[RTNL_FAMILY_MAX + 1];
+static refcount_t rtnl_msg_handlers_ref[RTNL_FAMILY_MAX + 1];
 
 static inline int rtm_msgindex(int msgtype)
 {
@@ -262,10 +263,18 @@ EXPORT_SYMBOL_GPL(rtnl_unregister);
  */
 void rtnl_unregister_all(int protocol)
 {
+	struct rtnl_link *handlers;
+
 	BUG_ON(protocol < 0 || protocol > RTNL_FAMILY_MAX);
 
-	kfree(rtnl_msg_handlers[protocol]);
+	rtnl_lock();
+	handlers = rtnl_msg_handlers[protocol];
 	rtnl_msg_handlers[protocol] = NULL;
+	rtnl_unlock();
+
+	while (refcount_read(&rtnl_msg_handlers_ref[protocol]) > 0)
+		schedule();
+	kfree(handlers);
 }
 EXPORT_SYMBOL_GPL(rtnl_unregister_all);
 
@@ -3872,6 +3881,8 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 		if (dumpit == NULL)
 			return -EOPNOTSUPP;
 
+		refcount_inc(&rtnl_msg_handlers_ref[family]);
+
 		if (type == RTM_GETLINK)
 			min_dump_alloc = rtnl_calcit(skb, nlh);
 
@@ -3885,6 +3896,7 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			err = netlink_dump_start(rtnl, skb, nlh, &c);
 		}
 		rtnl_lock();
+		refcount_dec(&rtnl_msg_handlers_ref[family]);
 		return err;
 	}
 
