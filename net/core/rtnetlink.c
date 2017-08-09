@@ -64,7 +64,6 @@
 struct rtnl_link {
 	rtnl_doit_func		doit;
 	rtnl_dumpit_func	dumpit;
-	rtnl_calcit_func 	calcit;
 };
 
 static DEFINE_MUTEX(rtnl_mutex);
@@ -163,21 +162,6 @@ static rtnl_dumpit_func rtnl_get_dumpit(int protocol, int msgindex)
 	return tab[msgindex].dumpit;
 }
 
-static rtnl_calcit_func rtnl_get_calcit(int protocol, int msgindex)
-{
-	struct rtnl_link *tab;
-
-	if (protocol <= RTNL_FAMILY_MAX)
-		tab = rtnl_msg_handlers[protocol];
-	else
-		tab = NULL;
-
-	if (tab == NULL || tab[msgindex].calcit == NULL)
-		tab = rtnl_msg_handlers[PF_UNSPEC];
-
-	return tab[msgindex].calcit;
-}
-
 /**
  * __rtnl_register - Register a rtnetlink message type
  * @protocol: Protocol family or PF_UNSPEC
@@ -220,9 +204,6 @@ int __rtnl_register(int protocol, int msgtype,
 
 	if (dumpit)
 		tab[msgindex].dumpit = dumpit;
-
-	if (calcit)
-		tab[msgindex].calcit = calcit;
 
 	return 0;
 }
@@ -3885,15 +3866,14 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	if (kind == 2 && nlh->nlmsg_flags&NLM_F_DUMP) {
 		struct sock *rtnl;
 		rtnl_dumpit_func dumpit;
-		rtnl_calcit_func calcit;
 		u16 min_dump_alloc = 0;
 
 		dumpit = rtnl_get_dumpit(family, type);
 		if (dumpit == NULL)
 			return -EOPNOTSUPP;
-		calcit = rtnl_get_calcit(family, type);
-		if (calcit)
-			min_dump_alloc = calcit(skb, nlh);
+
+		if (type == RTM_GETLINK)
+			min_dump_alloc = rtnl_calcit(skb, nlh);
 
 		__rtnl_unlock();
 		rtnl = net->rtnl;
@@ -3989,7 +3969,7 @@ void __init rtnetlink_init(void)
 	register_netdevice_notifier_rh(&rtnetlink_dev_notifier);
 
 	rtnl_register(PF_UNSPEC, RTM_GETLINK, rtnl_getlink,
-		      rtnl_dump_ifinfo, rtnl_calcit);
+		      rtnl_dump_ifinfo, NULL);
 	rtnl_register(PF_UNSPEC, RTM_SETLINK, rtnl_setlink, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_NEWLINK, rtnl_newlink, NULL, NULL);
 	rtnl_register(PF_UNSPEC, RTM_DELLINK, rtnl_dellink, NULL, NULL);
