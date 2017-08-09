@@ -64,6 +64,7 @@
 struct rtnl_link {
 	rtnl_doit_func		doit;
 	rtnl_dumpit_func	dumpit;
+	unsigned int		flags;
 };
 
 static DEFINE_MUTEX(rtnl_mutex);
@@ -174,6 +175,7 @@ int __rtnl_register(int protocol, int msgtype,
 		tab[msgindex].doit = doit;
 	if (dumpit)
 		tab[msgindex].dumpit = dumpit;
+	tab[msgindex].flags |= flags;
 
 	return 0;
 }
@@ -223,6 +225,7 @@ int rtnl_unregister(int protocol, int msgtype)
 
 	handlers[msgindex].doit = NULL;
 	handlers[msgindex].dumpit = NULL;
+	handlers[msgindex].flags = 0;
 	rtnl_unlock();
 
 	return 0;
@@ -3841,6 +3844,7 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	struct rtnl_link *handlers;
 	int err = -EOPNOTSUPP;
 	rtnl_doit_func doit;
+	unsigned int flags;
 	int sz_idx, kind;
 	int family;
 	int type;
@@ -3904,6 +3908,17 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			};
 			err = netlink_dump_start(rtnl, skb, nlh, &c);
 		}
+		refcount_dec(&rtnl_msg_handlers_ref[family]);
+		return err;
+	}
+
+	flags = READ_ONCE(handlers[type].flags);
+	if (flags & RTNL_FLAG_DOIT_UNLOCKED) {
+		refcount_inc(&rtnl_msg_handlers_ref[family]);
+		doit = READ_ONCE(handlers[type].doit);
+		rcu_read_unlock();
+		if (doit)
+			err = doit(skb, nlh);
 		refcount_dec(&rtnl_msg_handlers_ref[family]);
 		return err;
 	}
