@@ -136,6 +136,7 @@ struct mlx5_nic_flow_attr {
 #ifdef HAVE_TCF_PEDIT_TCFP_KEYS_EX
 	u32 mod_hdr_id;
 #endif
+	u8 match_level;
 };
 
 #define MLX5E_TC_FLOW_BASE (MLX5E_TC_LAST_EXPORTED_BIT + 1)
@@ -395,7 +396,9 @@ mlx5e_tc_add_nic_flow(struct mlx5e_priv *priv,
 		table_created = true;
 	}
 
-	parse_attr->spec.match_criteria_enable = MLX5_MATCH_OUTER_HEADERS;
+	if (attr->match_level != MLX5_MATCH_NONE)
+		parse_attr->spec.match_criteria_enable = MLX5_MATCH_OUTER_HEADERS;
+
 	flow->rule[0] = mlx5_add_flow_rules(priv->fs.tc.t, &parse_attr->spec,
 				   &flow_act, &dest, 1);
 
@@ -1307,6 +1310,11 @@ static int parse_cls_flower(struct mlx5e_priv *priv,
 			return -EOPNOTSUPP;
 		}
 	}
+
+	if (flow->flags & MLX5E_TC_FLOW_ESWITCH)
+		flow->esw_attr->match_level = match_level;
+	else
+		flow->nic_attr->match_level = match_level;
 
 	return err;
 }

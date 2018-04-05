@@ -334,6 +334,7 @@ struct mlx5_esw_flow_attr {
 	bool	vlan_handled;
 	u32	encap_id;
 	u32	mod_hdr_id;
+	u8	match_level;
 #ifdef HAVE_TCF_TUNNEL_INFO
 	struct mlx5e_tc_flow_parse_attr *parse_attr;
 #endif
