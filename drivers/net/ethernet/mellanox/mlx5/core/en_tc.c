@@ -2299,7 +2299,6 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 #ifdef HAVE_TCF_TUNNEL_INFO
 	bool encap = false;
 #endif
-	int err = 0;
 
 #ifdef HAVE_TCF_EXTS_HAS_ACTIONS
 	if (!tcf_exts_has_actions(exts))
@@ -2327,6 +2326,8 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 
 #ifdef HAVE_TCF_PEDIT_TCFP_KEYS_EX
 		if (is_tcf_pedit(a)) {
+			int err;
+
 			err = parse_tc_pedit_action(priv, a, MLX5_FLOW_NAMESPACE_FDB,
 						    parse_attr);
 			if (err)
@@ -2463,7 +2464,7 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 		return -EOPNOTSUPP;
 	}
 
-	return err;
+	return 0;
 }
 
 static bool is_peer_flow_needed(struct mlx5_core_dev *dev)
