@@ -923,7 +923,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	u16 addr_type = 0;
 	u8 ip_proto = 0;
 
-	*min_inline = MLX5_INLINE_MODE_L2;
+	*min_inline = MLX5_INLINE_MODE_NONE;
 
 	if (f->dissector->used_keys &
 	    ~(BIT(FLOW_DISSECTOR_KEY_CONTROL) |
@@ -990,58 +990,6 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	}
 #endif
 
-	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_CONTROL)) {
-		struct flow_dissector_key_control *key =
-			skb_flow_dissector_target(f->dissector,
-						  FLOW_DISSECTOR_KEY_CONTROL,
-						  f->key);
-
-		struct flow_dissector_key_control *mask =
-			skb_flow_dissector_target(f->dissector,
-						  FLOW_DISSECTOR_KEY_CONTROL,
-						  f->mask);
-		addr_type = key->addr_type;
-
-		/* the HW doesn't support frag first/later */
-		if (mask->flags & FLOW_DIS_FIRST_FRAG)
-			return -EOPNOTSUPP;
-
-		if (mask->flags & FLOW_DIS_IS_FRAGMENT) {
-			MLX5_SET(fte_match_set_lyr_2_4, headers_c, frag, 1);
-			MLX5_SET(fte_match_set_lyr_2_4, headers_v, frag,
-				 key->flags & FLOW_DIS_IS_FRAGMENT);
-
-			/* the HW doesn't need L3 inline to match on frag=no */
-			if (key->flags & FLOW_DIS_IS_FRAGMENT)
-				*min_inline = MLX5_INLINE_MODE_IP;
-		}
-	}
-
-	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_BASIC)) {
-		struct flow_dissector_key_basic *key =
-			skb_flow_dissector_target(f->dissector,
-						  FLOW_DISSECTOR_KEY_BASIC,
-						  f->key);
-		struct flow_dissector_key_basic *mask =
-			skb_flow_dissector_target(f->dissector,
-						  FLOW_DISSECTOR_KEY_BASIC,
-						  f->mask);
-		ip_proto = key->ip_proto;
-
-		MLX5_SET(fte_match_set_lyr_2_4, headers_c, ethertype,
-			 ntohs(mask->n_proto));
-		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ethertype,
-			 ntohs(key->n_proto));
-
-		MLX5_SET(fte_match_set_lyr_2_4, headers_c, ip_protocol,
-			 mask->ip_proto);
-		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ip_protocol,
-			 key->ip_proto);
-
-		if (mask->ip_proto)
-			*min_inline = MLX5_INLINE_MODE_IP;
-	}
-
 	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_ETH_ADDRS)) {
 		struct flow_dissector_key_eth_addrs *key =
 			skb_flow_dissector_target(f->dissector,
@@ -1065,6 +1013,9 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		ether_addr_copy(MLX5_ADDR_OF(fte_match_set_lyr_2_4, headers_v,
 					     smac_47_16),
 				key->src);
+
+		if (!is_zero_ether_addr(mask->src) || !is_zero_ether_addr(mask->dst))
+			*min_inline = MLX5_INLINE_MODE_L2;
 	}
 
 #ifdef HAVE_FLOW_DISSECTOR_KEY_VLAN
@@ -1086,6 +1037,8 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 
 			MLX5_SET(fte_match_set_lyr_2_4, headers_c, first_prio, mask->vlan_priority);
 			MLX5_SET(fte_match_set_lyr_2_4, headers_v, first_prio, key->vlan_priority);
+
+			*min_inline = MLX5_INLINE_MODE_L2;
 		}
 #else
 	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_VLANID)) {
@@ -1104,6 +1057,74 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			MLX5_SET(fte_match_set_lyr_2_4, headers_v, first_vid, key->vlan_id);
 		}
 #endif
+	}
+
+	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_BASIC)) {
+		struct flow_dissector_key_basic *key =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_BASIC,
+						  f->key);
+		struct flow_dissector_key_basic *mask =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_BASIC,
+						  f->mask);
+		MLX5_SET(fte_match_set_lyr_2_4, headers_c, ethertype,
+			 ntohs(mask->n_proto));
+		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ethertype,
+			 ntohs(key->n_proto));
+
+		if (mask->n_proto)
+			*min_inline = MLX5_INLINE_MODE_L2;
+	}
+
+	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_CONTROL)) {
+		struct flow_dissector_key_control *key =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_CONTROL,
+						  f->key);
+
+		struct flow_dissector_key_control *mask =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_CONTROL,
+						  f->mask);
+		addr_type = key->addr_type;
+
+		/* the HW doesn't support frag first/later */
+		if (mask->flags & FLOW_DIS_FIRST_FRAG)
+			return -EOPNOTSUPP;
+
+		if (mask->flags & FLOW_DIS_IS_FRAGMENT) {
+			MLX5_SET(fte_match_set_lyr_2_4, headers_c, frag, 1);
+			MLX5_SET(fte_match_set_lyr_2_4, headers_v, frag,
+				 key->flags & FLOW_DIS_IS_FRAGMENT);
+
+			/* the HW doesn't need L3 inline to match on frag=no */
+			if (!(key->flags & FLOW_DIS_IS_FRAGMENT))
+				*min_inline = MLX5_INLINE_MODE_L2;
+	/* ***  L2 attributes parsing up to here *** */
+			else
+				*min_inline = MLX5_INLINE_MODE_IP;
+		}
+	}
+
+	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_BASIC)) {
+		struct flow_dissector_key_basic *key =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_BASIC,
+						  f->key);
+		struct flow_dissector_key_basic *mask =
+			skb_flow_dissector_target(f->dissector,
+						  FLOW_DISSECTOR_KEY_BASIC,
+						  f->mask);
+		ip_proto = key->ip_proto;
+
+		MLX5_SET(fte_match_set_lyr_2_4, headers_c, ip_protocol,
+			 mask->ip_proto);
+		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ip_protocol,
+			 key->ip_proto);
+
+		if (mask->ip_proto)
+			*min_inline = MLX5_INLINE_MODE_IP;
 	}
 
 	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
@@ -1191,6 +1212,8 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			*min_inline = MLX5_INLINE_MODE_IP;
 	}
 #endif
+
+	/* ***  L3 attributes parsing up to here *** */
 
 	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_PORTS)) {
 		struct flow_dissector_key_ports *key =
