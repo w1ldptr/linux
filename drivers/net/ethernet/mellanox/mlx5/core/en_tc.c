@@ -914,7 +914,7 @@ vxlan_match_offload_err:
 static int __parse_cls_flower(struct mlx5e_priv *priv,
 			      struct mlx5_flow_spec *spec,
 			      struct tc_cls_flower_offload *f,
-			      u8 *min_inline)
+			      u8 *match_level)
 {
 	void *headers_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
 				       outer_headers);
@@ -923,7 +923,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	u16 addr_type = 0;
 	u8 ip_proto = 0;
 
-	*min_inline = MLX5_INLINE_MODE_NONE;
+	*match_level = MLX5_MATCH_NONE;
 
 	if (f->dissector->used_keys &
 	    ~(BIT(FLOW_DISSECTOR_KEY_CONTROL) |
@@ -1015,7 +1015,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 				key->src);
 
 		if (!is_zero_ether_addr(mask->src) || !is_zero_ether_addr(mask->dst))
-			*min_inline = MLX5_INLINE_MODE_L2;
+			*match_level = MLX5_MATCH_L2;
 	}
 
 #ifdef HAVE_FLOW_DISSECTOR_KEY_VLAN
@@ -1038,7 +1038,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			MLX5_SET(fte_match_set_lyr_2_4, headers_c, first_prio, mask->vlan_priority);
 			MLX5_SET(fte_match_set_lyr_2_4, headers_v, first_prio, key->vlan_priority);
 
-			*min_inline = MLX5_INLINE_MODE_L2;
+			*match_level = MLX5_MATCH_L2;
 		}
 #else
 	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_VLANID)) {
@@ -1074,7 +1074,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			 ntohs(key->n_proto));
 
 		if (mask->n_proto)
-			*min_inline = MLX5_INLINE_MODE_L2;
+			*match_level = MLX5_MATCH_L2;
 	}
 
 	if (dissector_uses_key(f->dissector, FLOW_DISSECTOR_KEY_CONTROL)) {
@@ -1100,10 +1100,10 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 
 			/* the HW doesn't need L3 inline to match on frag=no */
 			if (!(key->flags & FLOW_DIS_IS_FRAGMENT))
-				*min_inline = MLX5_INLINE_MODE_L2;
+				*match_level = MLX5_INLINE_MODE_L2;
 	/* ***  L2 attributes parsing up to here *** */
 			else
-				*min_inline = MLX5_INLINE_MODE_IP;
+				*match_level = MLX5_INLINE_MODE_IP;
 		}
 	}
 
@@ -1124,7 +1124,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			 key->ip_proto);
 
 		if (mask->ip_proto)
-			*min_inline = MLX5_INLINE_MODE_IP;
+			*match_level = MLX5_MATCH_L3;
 	}
 
 	if (addr_type == FLOW_DISSECTOR_KEY_IPV4_ADDRS) {
@@ -1151,7 +1151,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		       &key->dst, sizeof(key->dst));
 
 		if (mask->src || mask->dst)
-			*min_inline = MLX5_INLINE_MODE_IP;
+			*match_level = MLX5_MATCH_L3;
 	}
 
 	if (addr_type == FLOW_DISSECTOR_KEY_IPV6_ADDRS) {
@@ -1180,7 +1180,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 
 		if (ipv6_addr_type(&mask->src) != IPV6_ADDR_ANY ||
 		    ipv6_addr_type(&mask->dst) != IPV6_ADDR_ANY)
-			*min_inline = MLX5_INLINE_MODE_IP;
+			*match_level = MLX5_MATCH_L3;
 	}
 
 #ifdef HAVE_FLOW_DISSECTOR_KEY_IP
@@ -1209,7 +1209,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			return -EOPNOTSUPP;
 
 		if (mask->tos || mask->ttl)
-			*min_inline = MLX5_INLINE_MODE_IP;
+			*match_level = MLX5_MATCH_L3;
 	}
 #endif
 
@@ -1255,7 +1255,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		}
 
 		if (mask->src || mask->dst)
-			*min_inline = MLX5_INLINE_MODE_TCP_UDP;
+			*match_level = MLX5_MATCH_L4;
 	}
 
 #ifdef HAVE_FLOW_DISSECTOR_KEY_TCP
@@ -1275,7 +1275,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			 ntohs(key->flags));
 
 		if (mask->flags)
-			*min_inline = MLX5_INLINE_MODE_TCP_UDP;
+			*match_level = MLX5_MATCH_L4;
 	}
 #endif
 
@@ -1291,19 +1291,19 @@ static int parse_cls_flower(struct mlx5e_priv *priv,
 	struct mlx5_eswitch *esw = dev->priv.eswitch;
 	struct mlx5e_rep_priv *rpriv = priv->ppriv;
 	struct mlx5_eswitch_rep *rep;
-	u8 min_inline;
+	u8 match_level;
 	int err;
 
-	err = __parse_cls_flower(priv, spec, f, &min_inline);
+	err = __parse_cls_flower(priv, spec, f, &match_level);
 
 	if (!err && (flow->flags & MLX5E_TC_FLOW_ESWITCH)) {
 		rep = rpriv->rep;
 		if (rep->vport != FDB_UPLINK_VPORT &&
 		    (esw->offloads.inline_mode != MLX5_INLINE_MODE_NONE &&
-		    esw->offloads.inline_mode < min_inline)) {
+		    esw->offloads.inline_mode < match_level)) {
 			netdev_warn(priv->netdev,
 				    "Flow is not offloaded due to min inline setting, required %d actual %d\n",
-				    min_inline, esw->offloads.inline_mode);
+				    match_level, esw->offloads.inline_mode);
 			return -EOPNOTSUPP;
 		}
 	}
