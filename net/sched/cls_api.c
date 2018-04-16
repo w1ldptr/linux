@@ -192,6 +192,7 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	tp->prio = prio;
 	tp->chain = chain;
 	INIT_WORK(&tp->work, tcf_proto_destroy_work);
+	spin_lock_init(&tp->lock);
 	refcount_set(&tp->refcnt, 1);
 
 	err = tp->ops->init(tp);
@@ -242,14 +243,18 @@ static bool tcf_proto_is_empty(struct tcf_proto *tp)
 
 static bool tcf_proto_check_delete(struct tcf_proto *tp)
 {
+	spin_lock(&tp->lock);
 	if (tcf_proto_is_empty(tp))
 		tp->deleting = true;
+	spin_unlock(&tp->lock);
 	return tp->deleting;
 }
 
 static void tcf_proto_mark_delete(struct tcf_proto *tp)
 {
+	spin_lock(&tp->lock);
 	tp->deleting = true;
+	spin_unlock(&tp->lock);
 }
 
 #define ASSERT_BLOCK_LOCKED(block)					\
