@@ -314,6 +314,8 @@ struct tcf_proto {
 	void			*data;
 	const struct tcf_proto_ops	*ops;
 	struct tcf_chain	*chain;
+	bool			deleting;
+	refcount_t		refcnt;
 	struct rcu_head		rcu;
 	struct work_struct	work;
 };

@@ -192,6 +192,7 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	tp->prio = prio;
 	tp->chain = chain;
 	INIT_WORK(&tp->work, tcf_proto_destroy_work);
+	refcount_set(&tp->refcnt, 1);
 
 	err = tp->ops->init(tp);
 	if (err) {
@@ -205,9 +206,50 @@ errout:
 	return ERR_PTR(err);
 }
 
+static void tcf_proto_get(struct tcf_proto *tp)
+{
+	refcount_inc(&tp->refcnt);
+}
+
 static void tcf_proto_destroy(struct tcf_proto *tp)
 {
 	tc_queue_proto_work(&tp->work);
+}
+
+static void tcf_chain_put(struct tcf_chain *chain);
+
+static void tcf_proto_put(struct tcf_proto *tp)
+{
+	if (refcount_dec_and_test(&tp->refcnt))
+		tcf_proto_destroy(tp);
+}
+
+static int walker_noop(struct tcf_proto *tp, void *d, struct tcf_walker *arg)
+{
+	return -1;
+}
+
+static bool tcf_proto_is_empty(struct tcf_proto *tp)
+{
+	struct tcf_walker walker = { .fn = walker_noop, };
+
+	if (tp->ops->walk) {
+		tp->ops->walk(tp, &walker);
+		return !walker.stop;
+	}
+	return true;
+}
+
+static bool tcf_proto_check_delete(struct tcf_proto *tp)
+{
+	if (tcf_proto_is_empty(tp))
+		tp->deleting = true;
+	return tp->deleting;
+}
+
+static void tcf_proto_mark_delete(struct tcf_proto *tp)
+{
+	tp->deleting = true;
 }
 
 #define ASSERT_BLOCK_LOCKED(block)					\
@@ -449,17 +491,22 @@ static void tcf_chain_put_explicitly_created(struct tcf_chain *chain)
 
 static void tcf_chain_flush(struct tcf_chain *chain)
 {
-	struct tcf_proto *tp;
+	struct tcf_proto *tp, *tp_next;
 
 	spin_lock(&chain->filter_chain_lock);
 	tp = tcf_chain_dereference(chain->filter_chain, chain);
+	RCU_INIT_POINTER(chain->filter_chain, NULL);
 	tcf_chain0_head_change(chain, NULL);
 	spin_unlock(&chain->filter_chain_lock);
 
+	/* Wait for all rcu-protected users to finish. */
+	synchronize_rcu();
+
 	while (tp) {
-		RCU_INIT_POINTER(chain->filter_chain, tp->next);
-		tcf_proto_destroy(tp);
-		tp = rtnl_dereference(chain->filter_chain);
+		tp_next = tp->next;
+		tp->next = NULL;
+		tcf_proto_put(tp);
+		tp = tp_next;
 	}
 }
 
@@ -691,11 +738,35 @@ struct tcf_proto *
 tcf_get_next_proto(struct tcf_chain *chain, struct tcf_proto *iter)
 {
 	struct tcf_proto *tp;
+	u32 prio = 0;
 
+	ASSERT_RTNL();
 	spin_lock(&chain->filter_chain_lock);
-	tp = tcf_chain_dereference(iter ? iter->next : chain->filter_chain,
-				   chain);
+
+	if (!iter) {
+		tp = tcf_chain_dereference(chain->filter_chain, chain);
+	} else if (iter->deleting) {
+		/* If this tp is being deleted, then the next pointer might be
+		 * invalid. Restart search.
+		 */
+		prio = iter->prio + 1;
+		tp = tcf_chain_dereference(chain->filter_chain, chain);
+	} else {
+		tp = tcf_chain_dereference(iter->next, chain);
+	}
+
+	while (tp) {
+		if (!tp->deleting && tp->prio >= prio) {
+			tcf_proto_get(tp);
+			break;
+		}
+		tp = tcf_chain_dereference(tp->next, chain);
+	}
+
 	spin_unlock(&chain->filter_chain_lock);
+
+	if (iter)
+		tcf_proto_put(iter);
 
 	return tp;
 }
@@ -1077,6 +1148,8 @@ tcf_block_playback_offloads(struct tcf_block *block, tc_setup_cb_t *cb,
 	return 0;
 
 err_playback_remove:
+	if (tp)
+		tcf_proto_put(tp);
 	tcf_chain_put(chain);
 	tcf_block_playback_offloads(block, cb, cb_priv, false, offload_in_use);
 	return err;
@@ -1236,9 +1309,9 @@ static void tcf_chain_tp_insert(struct tcf_chain *chain,
 {
 	if (*chain_info->pprev == chain->filter_chain)
 		tcf_chain0_head_change(chain, tp);
+	tcf_proto_get(tp);
 	RCU_INIT_POINTER(tp->next, tcf_chain_tp_prev(chain, chain_info));
 	rcu_assign_pointer(*chain_info->pprev, tp);
-	tcf_chain_hold(chain);
 }
 
 static void tcf_chain_tp_remove(struct tcf_chain *chain,
@@ -1247,9 +1320,82 @@ static void tcf_chain_tp_remove(struct tcf_chain *chain,
 {
 	struct tcf_proto *next = tcf_chain_dereference(chain_info->next, chain);
 
+	tcf_proto_mark_delete(tp);
 	if (tp == chain->filter_chain)
 		tcf_chain0_head_change(chain, next);
 	RCU_INIT_POINTER(*chain_info->pprev, next);
+}
+
+static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
+					   struct tcf_chain_info *chain_info,
+					   u32 protocol, u32 prio,
+					   bool prio_allocate);
+
+/* Try to insert new proto.
+ * If proto with specified priority already exists, free new proto
+ * and return existing one.
+ */
+
+static struct tcf_proto *tcf_chain_tp_insert_unique(struct tcf_chain *chain,
+						    struct tcf_proto *tp,
+						    u32 protocol, u32 prio)
+{
+	struct tcf_chain_info chain_info;
+	struct tcf_proto *tp_new;
+
+	spin_lock(&chain->filter_chain_lock);
+
+	tp_new = tcf_chain_tp_find(chain, &chain_info,
+				   protocol, prio, false);
+	if (!tp_new)
+		tcf_chain_tp_insert(chain, &chain_info, tp);
+	spin_unlock(&chain->filter_chain_lock);
+
+	if (tp_new) {
+		tcf_proto_destroy(tp);
+		tp = tp_new;
+	}
+
+	return tp;
+}
+
+static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
+				      struct tcf_proto *tp)
+{
+	struct tcf_chain_info chain_info;
+	struct tcf_proto *tp_iter;
+	struct tcf_proto **pprev;
+	struct tcf_proto *next;
+
+	spin_lock(&chain->filter_chain_lock);
+
+	/* Atomically find and remove tp from chain. */
+	for (pprev = &chain->filter_chain;
+	     (tp_iter = tcf_chain_dereference(*pprev, chain));
+	     pprev = &tp_iter->next) {
+		if (tp_iter == tp) {
+			chain_info.pprev = pprev;
+			chain_info.next = tp_iter->next;
+			WARN_ON(tp_iter->deleting);
+			break;
+		}
+	}
+	/* Verify that tp still exists and no new filters were inserted
+	 * concurrently.
+	 * Mark tp for deletion if it is empty.
+	 */
+	if (!tp_iter || !tcf_proto_check_delete(tp)) {
+		spin_unlock(&chain->filter_chain_lock);
+		return;
+	}
+
+	next = tcf_chain_dereference(chain_info.next, chain);
+	if (tp == chain->filter_chain)
+		tcf_chain0_head_change(chain, next);
+	RCU_INIT_POINTER(*chain_info.pprev, next);
+	spin_unlock(&chain->filter_chain_lock);
+
+	tcf_proto_put(tp);
 }
 
 static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
@@ -1276,7 +1422,12 @@ static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 		}
 	}
 	chain_info->pprev = pprev;
-	chain_info->next = tp ? tp->next : NULL;
+	if (tp) {
+		chain_info->next = tp->next;
+		tcf_proto_get(tp);
+	} else {
+		chain_info->next = NULL;
+	}
 	return tp;
 }
 
@@ -1428,6 +1579,7 @@ replay:
 	prio = TC_H_MAJ(t->tcm_info);
 	prio_allocate = false;
 	parent = t->tcm_parent;
+	tp = NULL;
 	cl = 0;
 
 	if (prio == 0) {
@@ -1471,6 +1623,8 @@ replay:
 	}
 
 	if (tp == NULL) {
+		struct tcf_proto *tp_new = NULL;
+
 		/* Proto-tcf does not exist, create new one */
 
 		if (tca[TCA_KIND] == NULL || !protocol) {
@@ -1488,22 +1642,27 @@ replay:
 							       &chain_info));
 
 		spin_unlock(&chain->filter_chain_lock);
-		tp = tcf_proto_create(nla_data(tca[TCA_KIND]),
-				      protocol, prio, chain);
-		if (IS_ERR(tp)) {
-			err = PTR_ERR(tp);
+		tp_new = tcf_proto_create(nla_data(tca[TCA_KIND]),
+					  protocol, prio, chain);
+		if (IS_ERR(tp_new)) {
+			err = PTR_ERR(tp_new);
 			goto errout;
 		}
 
-		spin_lock(&chain->filter_chain_lock);
-		tcf_chain_tp_insert(chain, &chain_info, tp);
-		spin_unlock(&chain->filter_chain_lock);
-		tp_created = 1;
-	} else if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
-		err = -EINVAL;
-		goto errout_locked;
+		tp = tcf_chain_tp_insert_unique(chain, tp_new, protocol, prio);
+
+		/* tp insert function can return another tp instance, if it was
+		 * created concurrently.
+		 */
+		if (tp == tp_new)
+			tp_created = 1;
 	} else {
 		spin_unlock(&chain->filter_chain_lock);
+	}
+
+	if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
+		err = -EINVAL;
+		goto errout;
 	}
 
 	fh = tp->ops->get(tp, t->tcm_handle);
@@ -1528,12 +1687,16 @@ replay:
 	if (err == 0)
 		tfilter_notify(net, skb, n, tp, block, q, parent, fh,
 			       RTM_NEWTFILTER, false);
-	else if (tp_created)
-		tcf_proto_destroy(tp);
 
 errout:
-	if (chain)
-		tcf_chain_put(chain);
+	if (err && tp_created)
+		tcf_chain_tp_delete_empty(chain, tp);
+	if (chain) {
+		if (tp && !IS_ERR(tp))
+			tcf_proto_put(tp);
+		if (!tp_created)
+			tcf_chain_put(chain);
+	}
 	tcf_block_release(q, block);
 	if (err == -EAGAIN)
 		/* Replay the request. */
@@ -1627,9 +1790,9 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 		tcf_chain_tp_remove(chain, &chain_info, tp);
 		spin_unlock(&chain->filter_chain_lock);
 
+		tcf_proto_put(tp);
 		tfilter_notify(net, skb, n, tp, block, q, parent, fh,
 			       RTM_DELTFILTER, false);
-		tcf_proto_destroy(tp);
 		err = 0;
 		goto errout;
 	}
@@ -1646,18 +1809,16 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 					 q, parent, fh, false, &last);
 		if (err)
 			goto errout;
-		if (last) {
-			spin_lock(&chain->filter_chain_lock);
-			tcf_chain_tp_remove(chain, &chain_info, tp);
-			spin_unlock(&chain->filter_chain_lock);
-
-			tcf_proto_destroy(tp);
-		}
+		if (last)
+			tcf_chain_tp_delete_empty(chain, tp);
 	}
 
 errout:
-	if (chain)
+	if (chain) {
+		if (tp && !IS_ERR(tp))
+			tcf_proto_put(tp);
 		tcf_chain_put(chain);
+	}
 	tcf_block_release(q, block);
 	return err;
 
@@ -1739,8 +1900,11 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	}
 
 errout:
-	if (chain)
+	if (chain) {
+		if (tp && !IS_ERR(tp))
+			tcf_proto_put(tp);
 		tcf_chain_put(chain);
+	}
 	tcf_block_release(q, block);
 	return err;
 }
@@ -1793,7 +1957,7 @@ static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
 					  NETLINK_CB(cb->skb).portid,
 					  cb->nlh->nlmsg_seq, NLM_F_MULTI,
 					  RTM_NEWTFILTER) <= 0)
-				return false;
+				goto errout;
 
 			cb->args[1] = 1;
 		}
@@ -1813,9 +1977,14 @@ static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
 		cb->args[2] = arg.w.cookie;
 		cb->args[1] = arg.w.count + 1;
 		if (arg.w.stop)
-			return false;
+			goto errout;
 	}
 	return true;
+
+errout:
+	if (tp)
+		tcf_proto_put(tp);
+	return false;
 }
 
 /* called with RTNL */
