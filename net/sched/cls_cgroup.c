@@ -220,7 +220,8 @@ static int cls_cgroup_change(struct net *net, struct sk_buff *in_skb,
 	if (err < 0)
 		goto errout;
 
-	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &new->exts, ovr);
+	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &new->exts, ovr,
+				true);
 	if (err < 0)
 		goto errout;
 
