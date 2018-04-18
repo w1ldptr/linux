@@ -1426,10 +1426,7 @@ int mlx5e_ethtool_flash_device(struct mlx5e_priv *priv,
 			       struct ethtool_flash *flash);
 
 #ifdef HAVE_TC_SETUP_CB_EGDEV_REGISTER
-#ifdef HAVE_TC_BLOCK_OFFLOAD
-int mlx5e_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
-			    void *cb_priv);
-#else
+#ifndef HAVE_TC_BLOCK_OFFLOAD
 int mlx5e_setup_tc(struct net_device *dev, enum tc_setup_type type,
 		   void *type_data);
 #endif
