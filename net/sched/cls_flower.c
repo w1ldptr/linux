@@ -1869,6 +1869,7 @@ static struct tcf_proto_ops cls_fl_ops __read_mostly = {
 	.tmplt_destroy	= fl_tmplt_destroy,
 	.tmplt_dump	= fl_tmplt_dump,
 	.owner		= THIS_MODULE,
+	.flags		= TCF_PROTO_OPS_DOIT_UNLOCKED,
 };
 
 static int __init cls_fl_init(void)
