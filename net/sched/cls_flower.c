@@ -70,6 +70,7 @@ struct fl_flow_mask {
 	struct list_head filters;
 	struct rcu_work rwork;
 	struct list_head list;
+	refcount_t refcnt;
 };
 
 struct fl_flow_tmplt {
@@ -247,15 +248,17 @@ static void fl_mask_free_work(struct work_struct *work)
 static bool fl_mask_put(struct cls_fl_head *head, struct fl_flow_mask *mask,
 			bool async)
 {
-	if (!list_empty(&mask->filters))
+	if (!refcount_dec_and_test(&mask->refcnt))
 		return false;
 
 	rhashtable_remove_fast(&head->ht, &mask->ht_node, mask_ht_params);
 	list_del_rcu(&mask->list);
-	if (async)
+	if (async) {
 		tcf_queue_work(&mask->rwork, fl_mask_free_work);
-	else
-		fl_mask_free(mask);
+	} else {
+		WARN_ON(!list_empty(&mask->filters));
+		kfree(mask);
+	}
 
 	return true;
 }
@@ -959,6 +962,7 @@ static struct fl_flow_mask *fl_create_new_mask(struct cls_fl_head *head,
 
 	INIT_LIST_HEAD_RCU(&newmask->filters);
 
+	refcount_set(&newmask->refcnt, 1);
 	err = rhashtable_insert_fast(&head->ht, &newmask->ht_node,
 				     mask_ht_params);
 	if (err)
@@ -982,9 +986,13 @@ static int fl_check_assign_mask(struct cls_fl_head *head,
 				struct fl_flow_mask *mask)
 {
 	struct fl_flow_mask *newmask;
+	int ret = 0;
 
+	rcu_read_lock();
 	fnew->mask = rhashtable_lookup_fast(&head->ht, mask, mask_ht_params);
 	if (!fnew->mask) {
+		rcu_read_unlock();
+
 		if (fold)
 			return -EINVAL;
 
@@ -993,11 +1001,15 @@ static int fl_check_assign_mask(struct cls_fl_head *head,
 			return PTR_ERR(newmask);
 
 		fnew->mask = newmask;
+		return 0;
 	} else if (fold && fold->mask != fnew->mask) {
-		return -EINVAL;
+		ret = -EINVAL;
+	} else if (!refcount_inc_not_zero(&fnew->mask->refcnt)) {
+		/* Mask was deleted concurrently, try again */
+		ret = -EAGAIN;
 	}
-
-	return 0;
+	rcu_read_unlock();
+	return ret;
 }
 
 static int fl_set_parms(struct net *net, struct tcf_proto *tp,
@@ -1137,6 +1149,7 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 		list_replace_rcu(&fold->list, &fnew->list);
 		fold->flags |= TCA_CLS_FLAGS_DELETED;
 
+		fl_mask_put(head, fold->mask, true);
 		if (!tc_skip_hw(fold->flags))
 			fl_hw_destroy_filter(tp, fold);
 		tcf_unbind_filter(tp, &fold->res);
@@ -1185,7 +1198,7 @@ errout_hw:
 	if (!tc_skip_hw(fnew->flags))
 		fl_hw_destroy_filter(tp, fnew);
 errout_mask:
-	fl_mask_put(head, fnew->mask, false);
+	fl_mask_put(head, fnew->mask, true);
 errout:
 	tcf_exts_destroy(&fnew->exts);
 	kfree(fnew);
