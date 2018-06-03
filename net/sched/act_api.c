@@ -1545,21 +1545,30 @@ tcf_action_egdev_cb_lookup(struct tcf_action_egdev *egdev,
 
 static int tcf_action_egdev_cb_call(struct tcf_action_egdev *egdev,
 				    enum tc_setup_type type,
-				    void *type_data, bool err_stop)
+				    void *type_data, bool err_stop,
+				    bool rtnl_held)
 {
 	struct tcf_action_egdev_cb *egdev_cb;
 	int ok_count = 0;
 	int err;
 
+	if (!rtnl_held)
+		rtnl_lock();
 	list_for_each_entry(egdev_cb, &egdev->cb_list, list) {
 		err = egdev_cb->cb(type, type_data, egdev_cb->cb_priv);
 		if (err) {
-			if (err_stop)
-				return err;
+			if (err_stop) {
+				ok_count = err;
+				goto errout;
+			}
 		} else {
 			ok_count++;
 		}
 	}
+errout:
+	if (!rtnl_held)
+		rtnl_unlock();
+
 	return ok_count;
 }
 
@@ -1642,13 +1651,14 @@ EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_unregister);
 
 int tc_setup_cb_egdev_call(const struct net_device *dev,
 			   enum tc_setup_type type, void *type_data,
-			   bool err_stop)
+			   bool err_stop, bool rtnl_held)
 {
 	struct tcf_action_egdev *egdev = tcf_action_egdev_lookup(dev);
 
 	if (!egdev)
 		return 0;
-	return tcf_action_egdev_cb_call(egdev, type, type_data, err_stop);
+	return tcf_action_egdev_cb_call(egdev, type, type_data, err_stop,
+					rtnl_held);
 }
 EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_call);
 

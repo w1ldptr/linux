@@ -197,7 +197,7 @@ void tc_setup_cb_egdev_unregister(const struct net_device *dev,
 				  tc_setup_cb_t *cb, void *cb_priv);
 int tc_setup_cb_egdev_call(const struct net_device *dev,
 			   enum tc_setup_type type, void *type_data,
-			   bool err_stop);
+			   bool err_stop, bool rtnl_held);
 #else
 static inline
 int tc_setup_cb_egdev_register(const struct net_device *dev,
@@ -215,7 +215,7 @@ void tc_setup_cb_egdev_unregister(const struct net_device *dev,
 static inline
 int tc_setup_cb_egdev_call(const struct net_device *dev,
 			   enum tc_setup_type type, void *type_data,
-			   bool err_stop)
+			   bool err_stop, bool rtnl_held)
 {
 	return 0;
 }

@@ -1264,27 +1264,37 @@ void tcf_block_cb_unregister(struct tcf_block *block,
 EXPORT_SYMBOL(tcf_block_cb_unregister);
 
 static int tcf_block_cb_call(struct tcf_block *block, enum tc_setup_type type,
-			     void *type_data, bool err_stop)
+			     void *type_data, bool err_stop, bool rtnl_held)
 {
 	struct tcf_block_cb *block_cb;
 	int ok_count = 0;
 	int err;
 
+	if (!rtnl_held)
+		rtnl_lock();
+
 #if 0
 	/* Make sure all netdevs sharing this block are offload-capable. */
-	if (block->nooffloaddevcnt && err_stop)
-		return -EOPNOTSUPP;
+	if (block->nooffloaddevcnt && err_stop) {
+		ok_count = -EOPNOTSUPP;
+		goto errout;
+	}
 #endif
 
 	list_for_each_entry(block_cb, &block->cb_list, list) {
 		err = block_cb->cb(type, type_data, block_cb->cb_priv);
 		if (err) {
-			if (err_stop)
-				return err;
+			if (err_stop) {
+				ok_count = err;
+				goto errout;
+			}
 		} else {
 			ok_count++;
 		}
 	}
+errout:
+	if (!rtnl_held)
+		rtnl_unlock();
 	return ok_count;
 }
 
@@ -2690,7 +2700,8 @@ EXPORT_SYMBOL(tcf_exts_dump_stats);
 
 static int tc_exts_setup_cb_egdev_call(struct tcf_exts *exts,
 				       enum tc_setup_type type,
-				       void *type_data, bool err_stop)
+				       void *type_data, bool err_stop,
+				       bool rtnl_held)
 {
 	int ok_count = 0;
 #ifdef CONFIG_NET_CLS_ACT
@@ -2708,7 +2719,8 @@ static int tc_exts_setup_cb_egdev_call(struct tcf_exts *exts,
 		dev = a->ops->get_dev(a);
 		if (!dev)
 			continue;
-		ret = tc_setup_cb_egdev_call(dev, type, type_data, err_stop);
+		ret = tc_setup_cb_egdev_call(dev, type, type_data, err_stop,
+					     rtnl_held);
 		a->ops->put_dev(dev);
 		if (ret < 0)
 			return ret;
@@ -2719,19 +2731,21 @@ static int tc_exts_setup_cb_egdev_call(struct tcf_exts *exts,
 }
 
 int tc_setup_cb_call(struct tcf_block *block, struct tcf_exts *exts,
-		     enum tc_setup_type type, void *type_data, bool err_stop)
+		     enum tc_setup_type type, void *type_data, bool err_stop,
+		     bool rtnl_held)
 {
 	int ok_count;
 	int ret;
 
-	ret = tcf_block_cb_call(block, type, type_data, err_stop);
+	ret = tcf_block_cb_call(block, type, type_data, err_stop, rtnl_held);
 	if (ret < 0)
 		return ret;
 	ok_count = ret;
 
 	if (!exts || ok_count)
 		return ok_count;
-	ret = tc_exts_setup_cb_egdev_call(exts, type, type_data, err_stop);
+	ret = tc_exts_setup_cb_egdev_call(exts, type, type_data, err_stop,
+					  rtnl_held);
 	if (ret < 0)
 		return ret;
 	ok_count += ret;
