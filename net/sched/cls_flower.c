@@ -290,21 +290,13 @@ static void fl_hw_destroy_filter(struct tcf_proto *tp, struct cls_fl_filter *f,
 	struct tc_cls_flower_offload cls_flower = {};
 	struct tcf_block *block = tp->chain->block;
 
-	if (!rtnl_held)
-		rtnl_lock();
-
 	tc_cls_common_offload_init(&cls_flower.common, tp, f->flags);
 	cls_flower.command = TC_CLSFLOWER_DESTROY;
 	cls_flower.cookie = (unsigned long) f;
 
 	tc_setup_cb_call(block, &f->exts, TC_SETUP_CLSFLOWER,
-			 &cls_flower, false, true);
-	spin_lock(&tp->lock);
-	tcf_block_offload_dec(block, &f->flags);
-	spin_unlock(&tp->lock);
-
-	if (!rtnl_held)
-		rtnl_unlock();
+			 &cls_flower, false, rtnl_held, &f->flags, &tp->lock,
+			 TC_BLOCK_OFFLOADCNT_DEC);
 }
 
 static int fl_hw_replace_filter(struct tcf_proto *tp,
@@ -314,9 +306,6 @@ static int fl_hw_replace_filter(struct tcf_proto *tp,
 	struct tcf_block *block = tp->chain->block;
 	bool skip_sw = tc_skip_sw(f->flags);
 	int err = 0;
-
-	if (!rtnl_held)
-		rtnl_lock();
 
 	tc_cls_common_offload_init(&cls_flower.common, tp, f->flags);
 	cls_flower.command = TC_CLSFLOWER_REPLACE;
@@ -328,16 +317,14 @@ static int fl_hw_replace_filter(struct tcf_proto *tp,
 	cls_flower.classid = f->res.classid;
 
 	err = tc_setup_cb_call(block, &f->exts, TC_SETUP_CLSFLOWER,
-			       &cls_flower, skip_sw, true);
+			       &cls_flower, skip_sw, rtnl_held, &f->flags, &tp->lock,
+			       TC_BLOCK_OFFLOADCNT_INC);
 	if (err < 0) {
-		fl_hw_destroy_filter(tp, f, true);
+		fl_hw_destroy_filter(tp, f, rtnl_held);
 		goto errout;
 	} else if (err > 0) {
 		f->in_hw_count = err;
 		err = 0;
-		spin_lock(&tp->lock);
-		tcf_block_offload_inc(block, &f->flags);
-		spin_unlock(&tp->lock);
 	}
 
 	if (skip_sw && !(f->flags & TCA_CLS_FLAGS_IN_HW)) {
@@ -346,8 +333,6 @@ static int fl_hw_replace_filter(struct tcf_proto *tp,
 	}
 
 errout:
-	if (!rtnl_held)
-		rtnl_unlock();
 
 	return err;
 }
@@ -358,9 +343,6 @@ static void fl_hw_update_stats(struct tcf_proto *tp, struct cls_fl_filter *f,
 	struct tc_cls_flower_offload cls_flower = {};
 	struct tcf_block *block = tp->chain->block;
 
-	if (!rtnl_held)
-		rtnl_lock();
-
 	tc_cls_common_offload_init(&cls_flower.common, tp, f->flags);
 	cls_flower.command = TC_CLSFLOWER_STATS;
 	cls_flower.cookie = (unsigned long) f;
@@ -368,10 +350,8 @@ static void fl_hw_update_stats(struct tcf_proto *tp, struct cls_fl_filter *f,
 	cls_flower.classid = f->res.classid;
 
 	tc_setup_cb_call(block, &f->exts, TC_SETUP_CLSFLOWER,
-			 &cls_flower, false, true);
-
-	if (!rtnl_held)
-		rtnl_unlock();
+			 &cls_flower, false, rtnl_held, NULL, NULL,
+			 TC_BLOCK_OFFLOADCNT_NOOP);
 }
 
 static struct cls_fl_head *fl_head_dereference(struct tcf_proto *tp)
@@ -1394,7 +1374,8 @@ static void fl_hw_create_tmplt(struct tcf_chain *chain,
 	 * call. It serves just as a hint for it.
 	 */
 	tc_setup_cb_call(block, NULL, TC_SETUP_CLSFLOWER,
-			 &cls_flower, false, true);
+			 &cls_flower, false, true, NULL, NULL,
+			 TC_BLOCK_OFFLOADCNT_NOOP);
 }
 
 static void fl_hw_destroy_tmplt(struct tcf_chain *chain,
@@ -1408,7 +1389,8 @@ static void fl_hw_destroy_tmplt(struct tcf_chain *chain,
 	cls_flower.cookie = (unsigned long) tmplt;
 
 	tc_setup_cb_call(block, NULL, TC_SETUP_CLSFLOWER,
-			 &cls_flower, false, true);
+			 &cls_flower, false, true, NULL, NULL,
+			 TC_BLOCK_OFFLOADCNT_NOOP);
 }
 
 static void *fl_tmplt_create(struct net *net, struct tcf_chain *chain,

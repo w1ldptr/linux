@@ -609,9 +609,16 @@ tcf_match_indev(struct sk_buff *skb, int ifindex)
 }
 #endif /* CONFIG_NET_CLS_IND */
 
+enum tc_block_update_offloadcnt {
+	TC_BLOCK_OFFLOADCNT_NOOP,
+	TC_BLOCK_OFFLOADCNT_INC,
+	TC_BLOCK_OFFLOADCNT_DEC,
+};
+
 int tc_setup_cb_call(struct tcf_block *block, struct tcf_exts *exts,
 		     enum tc_setup_type type, void *type_data, bool err_stop,
-		     bool rtnl_held);
+		     bool rtnl_held, u32 *flags, spinlock_t *flags_lock,
+		     enum tc_block_update_offloadcnt update_count);
 
 enum tc_block_command {
 	TC_BLOCK_BIND,

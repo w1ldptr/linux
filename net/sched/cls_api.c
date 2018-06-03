@@ -1344,7 +1344,9 @@ static bool tcf_block_cb_needs_rtnl(struct tcf_block *block)
 }
 
 static int tcf_block_cb_call(struct tcf_block *block, enum tc_setup_type type,
-			     void *type_data, bool err_stop, bool rtnl_held)
+			     void *type_data, bool err_stop, bool rtnl_held,
+			     u32 *flags, spinlock_t *flags_lock,
+			     enum tc_block_update_offloadcnt update_count)
 {
 	struct tcf_block_cb *block_cb;
 	int ok_count = 0;
@@ -1391,6 +1393,22 @@ retry_locked:
 		}
 	}
 errout:
+	if (flags_lock)
+		spin_lock(flags_lock);
+	switch (update_count) {
+	case TC_BLOCK_OFFLOADCNT_INC:
+		if (ok_count > 0)
+			tcf_block_offload_inc(block, flags);
+		break;
+	case TC_BLOCK_OFFLOADCNT_DEC:
+		tcf_block_offload_dec(block, flags);
+		break;
+	default:
+		break;
+	}
+	if (flags_lock)
+		spin_unlock(flags_lock);
+
 	up_read(&block->offloads_lock);
 	if (needs_rtnl)
 		rtnl_unlock();
@@ -2831,12 +2849,14 @@ static int tc_exts_setup_cb_egdev_call(struct tcf_exts *exts,
 
 int tc_setup_cb_call(struct tcf_block *block, struct tcf_exts *exts,
 		     enum tc_setup_type type, void *type_data, bool err_stop,
-		     bool rtnl_held)
+		     bool rtnl_held, u32 *flags, spinlock_t *flags_lock,
+		     enum tc_block_update_offloadcnt update_count)
 {
 	int ok_count;
 	int ret;
 
-	ret = tcf_block_cb_call(block, type, type_data, err_stop, rtnl_held);
+	ret = tcf_block_cb_call(block, type, type_data, err_stop, rtnl_held,
+				flags, flags_lock, update_count);
 	if (ret < 0)
 		return ret;
 	ok_count = ret;
