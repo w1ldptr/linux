@@ -557,27 +557,36 @@ static int tcf_block_offload_bind(struct tcf_block *block, struct Qdisc *q,
 				  struct tcf_block_ext_info *ei)
 {
 	struct net_device *dev = q->dev_queue->dev;
-	int err;
+	int err = 0;
 
+	down_write(&block->offloads_lock);
 	if (!get_ndo_ext(dev->netdev_ops, ndo_setup_tc_rh))
 		goto no_offload_dev_inc;
 
 	/* If tc offload feature is disabled and the block we try to bind
 	 * to already has some offloaded filters, forbid to bind.
 	 */
-	if (!tc_can_offload(dev) && tcf_block_offload_in_use(block))
-		return -EOPNOTSUPP;
+	if (!tc_can_offload(dev) && tcf_block_offload_in_use(block)) {
+		err =  -EOPNOTSUPP;
+		goto errout;
+	}
 
 	err = tcf_block_offload_cmd(block, dev, ei, TC_BLOCK_BIND);
-	if (err == -EOPNOTSUPP)
+	if (err == -EOPNOTSUPP) {
+		err = 0;
 		goto no_offload_dev_inc;
+	}
+	up_write(&block->offloads_lock);
 	return err;
 
 no_offload_dev_inc:
 	if (tcf_block_offload_in_use(block))
-		return -EOPNOTSUPP;
-	block->nooffloaddevcnt++;
-	return 0;
+		err =  -EOPNOTSUPP;
+	else
+		block->nooffloaddevcnt++;
+errout:
+	up_write(&block->offloads_lock);
+	return err;
 }
 
 static void tcf_block_offload_unbind(struct tcf_block *block, struct Qdisc *q,
@@ -586,15 +595,18 @@ static void tcf_block_offload_unbind(struct tcf_block *block, struct Qdisc *q,
 	struct net_device *dev = q->dev_queue->dev;
 	int err;
 
+	down_write(&block->offloads_lock);
 	if (!get_ndo_ext(dev->netdev_ops, ndo_setup_tc_rh))
 		goto no_offload_dev_dec;
 	err = tcf_block_offload_cmd(block, dev, ei, TC_BLOCK_UNBIND);
 	if (err == -EOPNOTSUPP)
 		goto no_offload_dev_dec;
+	up_write(&block->offloads_lock);
 	return;
 
 no_offload_dev_dec:
 	WARN_ON(block->nooffloaddevcnt-- == 0);
+	up_write(&block->offloads_lock);
 }
 
 static int
@@ -695,6 +707,7 @@ static struct tcf_block *tcf_block_create(struct net *net, struct Qdisc *q,
 		return ERR_PTR(-ENOMEM);
 	}
 	spin_lock_init(&block->lock);
+	init_rwsem(&block->offloads_lock);
 	INIT_LIST_HEAD(&block->chain_list);
 	INIT_LIST_HEAD(&block->cb_list);
 	INIT_LIST_HEAD(&block->owner_list);
@@ -1320,15 +1333,40 @@ void tcf_block_cb_unregister_unlocked(struct tcf_block *block,
 }
 EXPORT_SYMBOL(tcf_block_cb_unregister_unlocked);
 
+static bool tcf_block_cb_needs_rtnl(struct tcf_block *block)
+{
+	struct tcf_block_cb *block_cb;
+
+	list_for_each_entry(block_cb, &block->cb_list, list)
+		if (!(block_cb->flags & TCF_BLOCK_CB_DOIT_UNLOCKED))
+			return true;
+	return false;
+}
+
 static int tcf_block_cb_call(struct tcf_block *block, enum tc_setup_type type,
 			     void *type_data, bool err_stop, bool rtnl_held)
 {
 	struct tcf_block_cb *block_cb;
 	int ok_count = 0;
 	int err;
+	bool needs_rtnl = false;
 
-	if (!rtnl_held)
+retry_locked:
+	if (needs_rtnl)
 		rtnl_lock();
+
+	down_read(&block->offloads_lock);
+
+	/* Caller doesn't hold rtnl lock, but not all block callbacks are
+	 * unlocked.
+	 */
+	if (!rtnl_held && tcf_block_cb_needs_rtnl(block)) {
+		up_read(&block->offloads_lock);
+		needs_rtnl = true;
+		rtnl_held = true;
+		/* try again, with rtnl lock */
+		goto retry_locked;
+	}
 
 #if 0
 	/* Make sure all netdevs sharing this block are offload-capable. */
@@ -1353,7 +1391,8 @@ static int tcf_block_cb_call(struct tcf_block *block, enum tc_setup_type type,
 		}
 	}
 errout:
-	if (!rtnl_held)
+	up_read(&block->offloads_lock);
+	if (needs_rtnl)
 		rtnl_unlock();
 	return ok_count;
 }
