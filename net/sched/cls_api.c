@@ -2833,7 +2833,12 @@ static int tc_exts_setup_cb_egdev_call(struct tcf_exts *exts,
 		a = exts->actions[i];
 		if (!a->ops->get_dev)
 			continue;
+		rcu_read_lock();
+		/* Caller holds reference to action, action holds reference to
+		 * dev. Take rcu read lock to prevent runtime warnings.
+		 */
 		dev = a->ops->get_dev(a);
+		rcu_read_unlock();
 		if (!dev)
 			continue;
 		ret = tc_setup_cb_egdev_call(dev, type, type_data, err_stop,
