@@ -38,6 +38,9 @@ struct module;
 
 typedef int tc_setup_cb_t(enum tc_setup_type type,
 			  void *type_data, void *cb_priv);
+typedef int tc_setup_cb_unlocked_t(enum tc_setup_type type,
+				   void *type_data, void *cb_priv,
+				   bool rtnl_held);
 
 struct qdisc_rate_table {
 	struct tc_ratespec rate;

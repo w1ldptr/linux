@@ -1466,9 +1466,17 @@ struct tcf_action_net {
 
 static unsigned int tcf_action_net_id;
 
+enum tcf_egdev_cb_flags {
+	EGDEV_CB_FLAG_DOIT_UNLOCKED = 1,
+};
+
 struct tcf_action_egdev_cb {
+	int flags;
 	struct list_head list;
-	tc_setup_cb_t *cb;
+	union {
+		tc_setup_cb_t *cb;
+		tc_setup_cb_unlocked_t *cb_unlocked;
+	};
 	void *cb_priv;
 };
 
@@ -1533,13 +1541,19 @@ static void tcf_action_egdev_put(struct tcf_action_egdev *egdev)
 
 static struct tcf_action_egdev_cb *
 tcf_action_egdev_cb_lookup(struct tcf_action_egdev *egdev,
-			   tc_setup_cb_t *cb, void *cb_priv)
+			   void *cb, void *cb_priv)
 {
 	struct tcf_action_egdev_cb *egdev_cb;
 
 	list_for_each_entry(egdev_cb, &egdev->cb_list, list)
-		if (egdev_cb->cb == cb && egdev_cb->cb_priv == cb_priv)
-			return egdev_cb;
+		if (egdev_cb->flags & EGDEV_CB_FLAG_DOIT_UNLOCKED) {
+			if (egdev_cb->cb_unlocked == cb &&
+			    egdev_cb->cb_priv == cb_priv)
+				return egdev_cb;
+		} else {
+			if (egdev_cb->cb == cb && egdev_cb->cb_priv == cb_priv)
+				return egdev_cb;
+		}
 	return NULL;
 }
 
@@ -1555,7 +1569,10 @@ static int tcf_action_egdev_cb_call(struct tcf_action_egdev *egdev,
 	if (!rtnl_held)
 		rtnl_lock();
 	list_for_each_entry(egdev_cb, &egdev->cb_list, list) {
-		err = egdev_cb->cb(type, type_data, egdev_cb->cb_priv);
+		err = (egdev_cb->flags & EGDEV_CB_FLAG_DOIT_UNLOCKED) ?
+			egdev_cb->cb_unlocked(type, type_data,
+					      egdev_cb->cb_priv, true) :
+			egdev_cb->cb(type, type_data, egdev_cb->cb_priv);
 		if (err) {
 			if (err_stop) {
 				ok_count = err;
@@ -1573,7 +1590,8 @@ errout:
 }
 
 static int tcf_action_egdev_cb_add(struct tcf_action_egdev *egdev,
-				   tc_setup_cb_t *cb, void *cb_priv)
+				   void *cb, void *cb_priv,
+				   enum tcf_egdev_cb_flags flags)
 {
 	struct tcf_action_egdev_cb *egdev_cb;
 
@@ -1583,14 +1601,18 @@ static int tcf_action_egdev_cb_add(struct tcf_action_egdev *egdev,
 	egdev_cb = kzalloc(sizeof(*egdev_cb), GFP_KERNEL);
 	if (!egdev_cb)
 		return -ENOMEM;
-	egdev_cb->cb = cb;
+	egdev_cb->flags = flags;
+	if (flags & EGDEV_CB_FLAG_DOIT_UNLOCKED)
+		egdev_cb->cb_unlocked = cb;
+	else
+		egdev_cb->cb = cb;
 	egdev_cb->cb_priv = cb_priv;
 	list_add(&egdev_cb->list, &egdev->cb_list);
 	return 0;
 }
 
 static void tcf_action_egdev_cb_del(struct tcf_action_egdev *egdev,
-				    tc_setup_cb_t *cb, void *cb_priv)
+				    void *cb, void *cb_priv)
 {
 	struct tcf_action_egdev_cb *egdev_cb;
 
@@ -1602,14 +1624,15 @@ static void tcf_action_egdev_cb_del(struct tcf_action_egdev *egdev,
 }
 
 static int __tc_setup_cb_egdev_register(const struct net_device *dev,
-					tc_setup_cb_t *cb, void *cb_priv)
+					void *cb, void *cb_priv,
+					enum tcf_egdev_cb_flags flags)
 {
 	struct tcf_action_egdev *egdev = tcf_action_egdev_get(dev);
 	int err;
 
 	if (!egdev)
 		return -ENOMEM;
-	err = tcf_action_egdev_cb_add(egdev, cb, cb_priv);
+	err = tcf_action_egdev_cb_add(egdev, cb, cb_priv, flags);
 	if (err)
 		goto err_cb_add;
 	return 0;
@@ -1624,14 +1647,28 @@ int tc_setup_cb_egdev_register(const struct net_device *dev,
 	int err;
 
 	rtnl_lock();
-	err = __tc_setup_cb_egdev_register(dev, cb, cb_priv);
+	err = __tc_setup_cb_egdev_register(dev, cb, cb_priv, 0);
 	rtnl_unlock();
 	return err;
 }
 EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_register);
 
+int tc_setup_cb_egdev_register_unlocked(const struct net_device *dev,
+					tc_setup_cb_unlocked_t *cb,
+					void *cb_priv)
+{
+	int err;
+
+	rtnl_lock();
+	err = __tc_setup_cb_egdev_register(dev, cb, cb_priv,
+					   EGDEV_CB_FLAG_DOIT_UNLOCKED);
+	rtnl_unlock();
+	return err;
+}
+EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_register_unlocked);
+
 static void __tc_setup_cb_egdev_unregister(const struct net_device *dev,
-					   tc_setup_cb_t *cb, void *cb_priv)
+					   void *cb, void *cb_priv)
 {
 	struct tcf_action_egdev *egdev = tcf_action_egdev_lookup(dev);
 
@@ -1648,6 +1685,15 @@ void tc_setup_cb_egdev_unregister(const struct net_device *dev,
 	rtnl_unlock();
 }
 EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_unregister);
+void tc_setup_cb_egdev_unregister_unlocked(const struct net_device *dev,
+					   tc_setup_cb_unlocked_t *cb,
+					   void *cb_priv)
+{
+	rtnl_lock();
+	__tc_setup_cb_egdev_unregister(dev, cb, cb_priv);
+	rtnl_unlock();
+}
+EXPORT_SYMBOL_GPL(tc_setup_cb_egdev_unregister_unlocked);
 
 int tc_setup_cb_egdev_call(const struct net_device *dev,
 			   enum tc_setup_type type, void *type_data,
