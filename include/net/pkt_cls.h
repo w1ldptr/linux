@@ -35,6 +35,10 @@ struct tcf_block_ext_info {
 	u32 block_index;
 };
 
+enum tcf_block_cb_flags {
+	TCF_BLOCK_CB_DOIT_UNLOCKED = 1,
+};
+
 bool tcf_queue_work(struct rcu_work *rwork, work_func_t func);
 
 #ifdef CONFIG_NET_CLS
@@ -81,10 +85,16 @@ struct tcf_block_cb *__tcf_block_cb_register(struct tcf_block *block,
 int tcf_block_cb_register(struct tcf_block *block,
 			  tc_setup_cb_t *cb, void *cb_ident,
 			  void *cb_priv);
+int tcf_block_cb_register_unlocked(struct tcf_block *block,
+				   tc_setup_cb_unlocked_t *cb,
+				   void *cb_ident, void *cb_priv);
 void __tcf_block_cb_unregister(struct tcf_block *block,
 			       struct tcf_block_cb *block_cb);
 void tcf_block_cb_unregister(struct tcf_block *block,
 			     tc_setup_cb_t *cb, void *cb_ident);
+void tcf_block_cb_unregister_unlocked(struct tcf_block *block,
+				      tc_setup_cb_unlocked_t *cb,
+				      void *cb_ident);
 
 int tcf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 		 struct tcf_result *res, bool compat_mode);
@@ -178,6 +188,14 @@ int tcf_block_cb_register(struct tcf_block *block,
 }
 
 static inline
+int tcf_block_cb_register_unlocked(struct tcf_block *block,
+				   tc_setup_cb_unlocked_t *cb, void *cb_ident,
+				   void *cb_priv)
+{
+	return 0;
+}
+
+static inline
 void __tcf_block_cb_unregister(struct tcf_block *block,
 			       struct tcf_block_cb *block_cb)
 {
@@ -186,6 +204,13 @@ void __tcf_block_cb_unregister(struct tcf_block *block,
 static inline
 void tcf_block_cb_unregister(struct tcf_block *block,
 			     tc_setup_cb_t *cb, void *cb_ident)
+{
+}
+
+static inline
+void tcf_block_cb_unregister_unlocked(struct tcf_block *block,
+				      tc_setup_cb_unlocked_t *cb,
+				      void *cb_ident)
 {
 }
 
