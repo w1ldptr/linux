@@ -306,6 +306,10 @@ static int mlx5e_rep_ndo_setup_tc(struct net_device *dev, u32 handle,
 			return mlx5e_delete_flower(priv, tc->cls_flower);
 		case TC_CLSFLOWER_STATS:
 			return mlx5e_stats_flower(priv, tc->cls_flower);
+		case TC_CLSFLOWER_TMPLT_CREATE:
+			return -EOPNOTSUPP;
+		case TC_CLSFLOWER_TMPLT_DESTROY:
+			return -EOPNOTSUPP;
 		}
 	default:
 		return -EOPNOTSUPP;
