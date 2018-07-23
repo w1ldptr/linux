@@ -38,7 +38,7 @@ static DEFINE_RWLOCK(cls_mod_lock);
 
 /* Find classifier type by string name */
 
-static const struct tcf_proto_ops *tcf_proto_lookup_ops(const char *kind)
+static const struct tcf_proto_ops *__tcf_proto_lookup_ops(const char *kind)
 {
 	const struct tcf_proto_ops *t, *res = NULL;
 
@@ -54,6 +54,32 @@ static const struct tcf_proto_ops *tcf_proto_lookup_ops(const char *kind)
 		read_unlock(&cls_mod_lock);
 	}
 	return res;
+}
+
+static const struct tcf_proto_ops *
+tcf_proto_lookup_ops(const char *kind)
+{
+	const struct tcf_proto_ops *ops;
+
+	ops = __tcf_proto_lookup_ops(kind);
+	if (ops)
+		return ops;
+#ifdef CONFIG_MODULES
+	rtnl_unlock();
+	request_module("cls_%s", kind);
+	rtnl_lock();
+	ops = __tcf_proto_lookup_ops(kind);
+	/* We dropped the RTNL semaphore in order to perform
+	 * the module load. So, even if we succeeded in loading
+	 * the module we have to replay the request. We indicate
+	 * this using -EAGAIN.
+	 */
+	if (ops) {
+		module_put(ops->owner);
+		return ERR_PTR(-EAGAIN);
+	}
+#endif
+	return ERR_PTR(-ENOENT);
 }
 
 /* Register(unregister) new classifier type */
@@ -131,26 +157,9 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	if (!tp)
 		return ERR_PTR(-ENOBUFS);
 
-	err = -ENOENT;
 	tp->ops = tcf_proto_lookup_ops(kind);
-	if (!tp->ops) {
-#ifdef CONFIG_MODULES
-		rtnl_unlock();
-		request_module("cls_%s", kind);
-		rtnl_lock();
-		tp->ops = tcf_proto_lookup_ops(kind);
-		/* We dropped the RTNL semaphore in order to perform
-		 * the module load. So, even if we succeeded in loading
-		 * the module we have to replay the request. We indicate
-		 * this using -EAGAIN.
-		 */
-		if (tp->ops) {
-			module_put(tp->ops->owner);
-			err = -EAGAIN;
-		} else {
-			err = -ENOENT;
-		}
-#endif
+	if (IS_ERR(tp->ops)) {
+		err = PTR_ERR(tp->ops);
 		goto errout;
 	}
 	tp->classify = tp->ops->classify;
