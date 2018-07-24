@@ -27,7 +27,7 @@ obj-$(CONFIG_NET_IFE_SKBTCINDEX)	+= act_meta_skbtcindex.o
 obj-$(CONFIG_NET_ACT_TUNNEL_KEY)+= act_tunnel_key.o
 
 obj-$(CONFIG_NET_SCH_FIFO)	+= sch_fifo.o
-obj-$(CONFIG_NET_SCH_INGRESS)	+= sch_ingress.o 
+obj-$(CONFIG_NET_SCH_INGRESS)	+= sch_ingress.o
 
 obj-$(CONFIG_NET_CLS_CGROUP)	+= cls_cgroup.o
 obj-$(CONFIG_NET_CLS_FLOWER)	+= cls_flower.o
