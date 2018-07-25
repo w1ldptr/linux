@@ -1773,7 +1773,6 @@ replay:
 		tcf_chain_put_explicitly_created(chain);
 		break;
 	case RTM_GETCHAIN:
-		break;
 		err = tc_chain_notify(chain, skb, n->nlmsg_seq,
 				      n->nlmsg_seq, n->nlmsg_type, true);
 		break;
