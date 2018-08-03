@@ -1338,6 +1338,13 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	}
 	chain = tcf_chain_get(block, chain_index, false);
 	if (!chain) {
+		/* User requested flush on non-existent chain. Nothing to do,
+		 * so just return success.
+		 */
+		if (prio == 0) {
+			err = 0;
+			goto errout;
+		}
 		err = -EINVAL;
 		goto errout;
 	}
