@@ -1375,6 +1375,12 @@ int mlx5e_update_lro(struct net_device *netdev, bool enable);
 #endif
 
 /* common netdev helpers */
+void mlx5e_create_q_counters(struct mlx5e_priv *priv);
+void mlx5e_destroy_q_counters(struct mlx5e_priv *priv);
+int mlx5e_open_drop_rq(struct mlx5e_priv *priv,
+		       struct mlx5e_rq *drop_rq);
+void mlx5e_close_drop_rq(struct mlx5e_rq *drop_rq);
+
 int mlx5e_create_indirect_rqt(struct mlx5e_priv *priv);
 
 int mlx5e_create_indirect_tirs(struct mlx5e_priv *priv);
