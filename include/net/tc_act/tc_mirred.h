@@ -36,4 +36,9 @@ static inline struct net_device *tcf_mirred_dev(const struct tc_action *a)
 	return rtnl_dereference(to_mirred(a)->tcfm_dev);
 }
 
+static inline struct net_device *tcf_mirred_dev_rcu(const struct tc_action *a)
+{
+	return rcu_dereference(to_mirred(a)->tcfm_dev);
+}
+
 #endif /* __NET_TC_MIR_H */
