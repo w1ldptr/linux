@@ -30,26 +30,47 @@ struct tcf_tunnel_key {
 
 static inline bool is_tcf_tunnel_set(const struct tc_action *a)
 {
+	bool ret = false;
 #ifdef CONFIG_NET_CLS_ACT
 	struct tcf_tunnel_key *t = to_tunnel_key(a);
-	struct tcf_tunnel_key_params *params = rtnl_dereference(t->params);
+	struct tcf_tunnel_key_params *params;
 
+	rcu_read_lock();
+	params = rcu_dereference(t->params);
 	if (a->ops && a->ops->type == TCA_ACT_TUNNEL_KEY)
-		return params->tcft_action == TCA_TUNNEL_KEY_ACT_SET;
+		ret = params->tcft_action == TCA_TUNNEL_KEY_ACT_SET;
+	rcu_read_unlock();
 #endif
-	return false;
+	return ret;
 }
 
 static inline bool is_tcf_tunnel_release(const struct tc_action *a)
 {
+	bool ret = false;
 #ifdef CONFIG_NET_CLS_ACT
 	struct tcf_tunnel_key *t = to_tunnel_key(a);
-	struct tcf_tunnel_key_params *params = rtnl_dereference(t->params);
+	struct tcf_tunnel_key_params *params;
 
+	rcu_read_lock();
+	params = rcu_dereference(t->params);
 	if (a->ops && a->ops->type == TCA_ACT_TUNNEL_KEY)
-		return params->tcft_action == TCA_TUNNEL_KEY_ACT_RELEASE;
+		ret = params->tcft_action == TCA_TUNNEL_KEY_ACT_RELEASE;
+	rcu_read_unlock();
 #endif
-	return false;
+	return ret;
+}
+
+static inline
+struct ip_tunnel_info *tcf_tunnel_info_rcu(const struct tc_action *a)
+{
+#ifdef CONFIG_NET_CLS_ACT
+	struct tcf_tunnel_key *t = to_tunnel_key(a);
+	struct tcf_tunnel_key_params *params = rcu_dereference(t->params);
+
+	return &params->tcft_enc_metadata->u.tun_info;
+#else
+	return NULL;
+#endif
 }
 
 static inline struct ip_tunnel_info *tcf_tunnel_info(const struct tc_action *a)
