@@ -56,7 +56,7 @@ struct tc_police_compat {
 static int police_net_id;
 static struct tc_action_ops act_police_ops;
 
-static int tcf_act_police_walker(struct net *net, struct sk_buff *skb,
+static int tcf_police_walker(struct net *net, struct sk_buff *skb,
 				 struct netlink_callback *cb, int type,
 				 const struct tc_action_ops *ops)
 {
@@ -72,7 +72,7 @@ static const struct nla_policy police_policy[TCA_POLICE_MAX + 1] = {
 	[TCA_POLICE_RESULT]	= { .type = NLA_U32 },
 };
 
-static int tcf_act_police_init(struct net *net, struct nlattr *nla,
+static int tcf_police_init(struct net *net, struct nlattr *nla,
 			       struct nlattr *est, struct tc_action **a,
 			       int ovr, int bind, bool rtnl_held)
 {
@@ -201,7 +201,7 @@ failure:
 	return err;
 }
 
-static int tcf_act_police(struct sk_buff *skb, const struct tc_action *a,
+static int tcf_police_act(struct sk_buff *skb, const struct tc_action *a,
 			  struct tcf_result *res)
 {
 	struct tcf_police *police = to_police(a);
@@ -265,7 +265,7 @@ static int tcf_act_police(struct sk_buff *skb, const struct tc_action *a,
 	return police->tcf_action;
 }
 
-static int tcf_act_police_dump(struct sk_buff *skb, struct tc_action *a,
+static int tcf_police_dump(struct sk_buff *skb, struct tc_action *a,
 			       int bind, int ref)
 {
 	unsigned char *b = skb_tail_pointer(skb);
@@ -332,10 +332,10 @@ static struct tc_action_ops act_police_ops = {
 	.kind		=	"police",
 	.type		=	TCA_ID_POLICE,
 	.owner		=	THIS_MODULE,
-	.act		=	tcf_act_police,
-	.dump		=	tcf_act_police_dump,
-	.init		=	tcf_act_police_init,
-	.walk		=	tcf_act_police_walker,
+	.act		=	tcf_police_act,
+	.dump		=	tcf_police_dump,
+	.init		=	tcf_police_init,
+	.walk		=	tcf_police_walker,
 	.lookup		=	tcf_police_search,
 	.delete		=	tcf_police_delete,
 	.size		=	sizeof(struct tcf_police),
