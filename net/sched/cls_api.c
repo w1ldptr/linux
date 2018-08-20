@@ -57,7 +57,7 @@ static const struct tcf_proto_ops *__tcf_proto_lookup_ops(const char *kind)
 }
 
 static const struct tcf_proto_ops *
-tcf_proto_lookup_ops(const char *kind)
+tcf_proto_lookup_ops(const char *kind, bool rtnl_held)
 {
 	const struct tcf_proto_ops *ops;
 
@@ -65,9 +65,11 @@ tcf_proto_lookup_ops(const char *kind)
 	if (ops)
 		return ops;
 #ifdef CONFIG_MODULES
-	rtnl_unlock();
+	if (rtnl_held)
+		rtnl_unlock();
 	request_module("cls_%s", kind);
-	rtnl_lock();
+	if (rtnl_held)
+		rtnl_lock();
 	ops = __tcf_proto_lookup_ops(kind);
 	/* We dropped the RTNL semaphore in order to perform
 	 * the module load. So, even if we succeeded in loading
@@ -164,7 +166,7 @@ static void tcf_proto_destroy_work(struct work_struct *work)
 
 	rtnl_lock();
 
-	tp->ops->destroy(tp);
+	tp->ops->destroy(tp, true);
 	module_put(tp->ops->owner);
 	kfree_rcu(tp, rcu);
 	tcf_chain_put(chain);
@@ -173,7 +175,8 @@ static void tcf_proto_destroy_work(struct work_struct *work)
 }
 
 static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
-					  u32 prio, struct tcf_chain *chain)
+					  u32 prio, struct tcf_chain *chain,
+					  bool rtnl_held)
 {
 	struct tcf_proto *tp;
 	int err;
@@ -182,7 +185,7 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	if (!tp)
 		return ERR_PTR(-ENOBUFS);
 
-	tp->ops = tcf_proto_lookup_ops(kind);
+	tp->ops = tcf_proto_lookup_ops(kind, rtnl_held);
 	if (IS_ERR(tp->ops)) {
 		err = PTR_ERR(tp->ops);
 		goto errout;
@@ -230,21 +233,21 @@ static int walker_noop(struct tcf_proto *tp, void *d, struct tcf_walker *arg)
 	return -1;
 }
 
-static bool tcf_proto_is_empty(struct tcf_proto *tp)
+static bool tcf_proto_is_empty(struct tcf_proto *tp, bool rtnl_held)
 {
 	struct tcf_walker walker = { .fn = walker_noop, };
 
 	if (tp->ops->walk) {
-		tp->ops->walk(tp, &walker);
+		tp->ops->walk(tp, &walker, rtnl_held);
 		return !walker.stop;
 	}
 	return true;
 }
 
-static bool tcf_proto_check_delete(struct tcf_proto *tp)
+static bool tcf_proto_check_delete(struct tcf_proto *tp, bool rtnl_held)
 {
 	spin_lock(&tp->lock);
-	if (tcf_proto_is_empty(tp))
+	if (tcf_proto_is_empty(tp, rtnl_held))
 		tp->deleting = true;
 	spin_unlock(&tp->lock);
 	return tp->deleting;
@@ -1377,7 +1380,7 @@ static struct tcf_proto *tcf_chain_tp_insert_unique(struct tcf_chain *chain,
 }
 
 static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
-				      struct tcf_proto *tp)
+				      struct tcf_proto *tp, bool rtnl_held)
 {
 	struct tcf_chain_info chain_info;
 	struct tcf_proto *tp_iter;
@@ -1401,7 +1404,7 @@ static void tcf_chain_tp_delete_empty(struct tcf_chain *chain,
 	 * concurrently.
 	 * Mark tp for deletion if it is empty.
 	 */
-	if (!tp_iter || !tcf_proto_check_delete(tp)) {
+	if (!tp_iter || !tcf_proto_check_delete(tp, rtnl_held)) {
 		spin_unlock(&chain->filter_chain_lock);
 		return;
 	}
@@ -1451,7 +1454,8 @@ static struct tcf_proto *tcf_chain_tp_find(struct tcf_chain *chain,
 static int tcf_fill_node(struct net *net, struct sk_buff *skb,
 			 struct tcf_proto *tp, struct tcf_block *block,
 			 struct Qdisc *q, u32 parent, void *fh,
-			 u32 portid, u32 seq, u16 flags, int event)
+			 u32 portid, u32 seq, u16 flags, int event,
+			 bool rtnl_held)
 {
 	struct tcmsg *tcm;
 	struct nlmsghdr  *nlh;
@@ -1479,7 +1483,8 @@ static int tcf_fill_node(struct net *net, struct sk_buff *skb,
 	if (!fh) {
 		tcm->tcm_handle = 0;
 	} else {
-		if (tp->ops->dump && tp->ops->dump(net, tp, fh, skb, tcm) < 0)
+		if (tp->ops->dump &&
+		    tp->ops->dump(net, tp, fh, skb, tcm, rtnl_held) < 0)
 			goto nla_put_failure;
 	}
 	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
@@ -1494,7 +1499,8 @@ nla_put_failure:
 static int tfilter_notify(struct net *net, struct sk_buff *oskb,
 			  struct nlmsghdr *n, struct tcf_proto *tp,
 			  struct tcf_block *block, struct Qdisc *q,
-			  u32 parent, void *fh, int event, bool unicast)
+			  u32 parent, void *fh, int event, bool unicast,
+			  bool rtnl_held)
 {
 	struct sk_buff *skb;
 	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
@@ -1504,7 +1510,8 @@ static int tfilter_notify(struct net *net, struct sk_buff *oskb,
 		return -ENOBUFS;
 
 	if (tcf_fill_node(net, skb, tp, block, q, parent, fh, portid,
-			  n->nlmsg_seq, n->nlmsg_flags, event) <= 0) {
+			  n->nlmsg_seq, n->nlmsg_flags, event,
+			  rtnl_held) <= 0) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
@@ -1519,7 +1526,8 @@ static int tfilter_notify(struct net *net, struct sk_buff *oskb,
 static int tfilter_del_notify(struct net *net, struct sk_buff *oskb,
 			      struct nlmsghdr *n, struct tcf_proto *tp,
 			      struct tcf_block *block, struct Qdisc *q,
-			      u32 parent, void *fh, bool unicast, bool *last)
+			      u32 parent, void *fh, bool unicast, bool *last,
+			      bool rtnl_held)
 {
 	struct sk_buff *skb;
 	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
@@ -1530,12 +1538,13 @@ static int tfilter_del_notify(struct net *net, struct sk_buff *oskb,
 		return -ENOBUFS;
 
 	if (tcf_fill_node(net, skb, tp, block, q, parent, fh, portid,
-			  n->nlmsg_seq, n->nlmsg_flags, RTM_DELTFILTER) <= 0) {
+			  n->nlmsg_seq, n->nlmsg_flags, RTM_DELTFILTER,
+			  rtnl_held) <= 0) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
 
-	err = tp->ops->delete(tp, fh, last);
+	err = tp->ops->delete(tp, fh, last, rtnl_held);
 	if (err) {
 		kfree_skb(skb);
 		return err;
@@ -1551,14 +1560,21 @@ static int tfilter_del_notify(struct net *net, struct sk_buff *oskb,
 static void tfilter_notify_chain(struct net *net, struct sk_buff *oskb,
 				 struct tcf_block *block, struct Qdisc *q,
 				 u32 parent, struct nlmsghdr *n,
-				 struct tcf_chain *chain, int event)
+				 struct tcf_chain *chain, int event,
+				 bool rtnl_held)
 {
 	struct tcf_proto *tp = NULL;
 
 	for (tp = tcf_get_next_proto(chain, tp);
 	     tp; tp = tcf_get_next_proto(chain, tp))
 		tfilter_notify(net, oskb, n, tp, block,
-			       q, parent, NULL, event, false);
+			       q, parent, NULL, event, false, rtnl_held);
+}
+
+static void tfilter_put(struct tcf_proto *tp, void *fh)
+{
+	if (tp->ops->put && fh)
+		tp->ops->put(tp, fh);
 }
 
 static int tc_new_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
@@ -1580,6 +1596,7 @@ static int tc_new_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	void *fh;
 	int err;
 	int tp_created;
+	bool rtnl_held;
 
 	if (!netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
@@ -1598,6 +1615,7 @@ replay:
 	parent = t->tcm_parent;
 	tp = NULL;
 	cl = 0;
+	rtnl_held = true;
 
 	if (prio == 0) {
 		/* If no priority is provided by the user,
@@ -1660,7 +1678,7 @@ replay:
 
 		spin_unlock(&chain->filter_chain_lock);
 		tp_new = tcf_proto_create(nla_data(tca[TCA_KIND]),
-					  protocol, prio, chain);
+					  protocol, prio, chain, rtnl_held);
 		if (IS_ERR(tp_new)) {
 			err = PTR_ERR(tp_new);
 			goto errout;
@@ -1694,6 +1712,7 @@ replay:
 			goto errout;
 		}
 	} else if (n->nlmsg_flags & NLM_F_EXCL) {
+		tfilter_put(tp, fh);
 		err = -EEXIST;
 		goto errout;
 	}
@@ -1704,14 +1723,17 @@ replay:
 	}
 
 	err = tp->ops->change(net, skb, tp, cl, t->tcm_handle, tca, &fh,
-			n->nlmsg_flags & NLM_F_CREATE ? TCA_ACT_NOREPLACE : TCA_ACT_REPLACE);
-	if (err == 0)
+			      n->nlmsg_flags & NLM_F_CREATE ? TCA_ACT_NOREPLACE : TCA_ACT_REPLACE,
+			      rtnl_held);
+	if (err == 0) {
 		tfilter_notify(net, skb, n, tp, block, q, parent, fh,
-			       RTM_NEWTFILTER, false);
+			       RTM_NEWTFILTER, false, rtnl_held);
+		tfilter_put(tp, fh);
+	}
 
 errout:
 	if (err && tp_created)
-		tcf_chain_tp_delete_empty(chain, tp);
+		tcf_chain_tp_delete_empty(chain, tp, rtnl_held);
 	if (chain) {
 		if (tp && !IS_ERR(tp))
 			tcf_proto_put(tp);
@@ -1746,6 +1768,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	unsigned long cl = 0;
 	void *fh = NULL;
 	int err;
+	bool rtnl_held = true;
 
 	if (!netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
@@ -1792,7 +1815,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 
 	if (prio == 0) {
 		tfilter_notify_chain(net, skb, block, q, parent, n,
-				     chain, RTM_DELTFILTER);
+				     chain, RTM_DELTFILTER, rtnl_held);
 		tcf_chain_flush(chain);
 		err = 0;
 		goto errout;
@@ -1813,7 +1836,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 
 		tcf_proto_put(tp);
 		tfilter_notify(net, skb, n, tp, block, q, parent, fh,
-			       RTM_DELTFILTER, false);
+			       RTM_DELTFILTER, false, rtnl_held);
 		err = 0;
 		goto errout;
 	}
@@ -1827,11 +1850,13 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 		bool last;
 
 		err = tfilter_del_notify(net, skb, n, tp, block,
-					 q, parent, fh, false, &last);
+					 q, parent, fh, false, &last,
+					 rtnl_held);
+
 		if (err)
 			goto errout;
 		if (last)
-			tcf_chain_tp_delete_empty(chain, tp);
+			tcf_chain_tp_delete_empty(chain, tp, rtnl_held);
 	}
 
 errout:
@@ -1865,6 +1890,7 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	unsigned long cl = 0;
 	void *fh = NULL;
 	int err;
+	bool rtnl_held = true;
 
 	err = nlmsg_parse(n, sizeof(*t), tca, TCA_MAX, NULL);
 	if (err < 0)
@@ -1917,9 +1943,10 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 		err = -ENOENT;
 	} else {
 		err = tfilter_notify(net, skb, n, tp, block, q, parent,
-				     fh, RTM_NEWTFILTER, true);
+				     fh, RTM_NEWTFILTER, true, rtnl_held);
 	}
 
+	tfilter_put(tp, fh);
 errout:
 	if (chain) {
 		if (tp && !IS_ERR(tp))
@@ -1947,7 +1974,7 @@ static int tcf_node_dump(struct tcf_proto *tp, void *n, struct tcf_walker *arg)
 	return tcf_fill_node(net, a->skb, tp, a->block, a->q, a->parent,
 			     n, NETLINK_CB(a->cb->skb).portid,
 			     a->cb->nlh->nlmsg_seq, NLM_F_MULTI,
-			     RTM_NEWTFILTER);
+			     RTM_NEWTFILTER, true);
 }
 
 static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
@@ -1977,9 +2004,8 @@ static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
 			if (tcf_fill_node(net, skb, tp, block, q, parent, NULL,
 					  NETLINK_CB(cb->skb).portid,
 					  cb->nlh->nlmsg_seq, NLM_F_MULTI,
-					  RTM_NEWTFILTER) <= 0)
+					  RTM_NEWTFILTER, true) <= 0)
 				goto errout;
-
 			cb->args[1] = 1;
 		}
 		if (!tp->ops->walk)
@@ -1994,7 +2020,7 @@ static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
 		arg.w.skip = cb->args[1] - 1;
 		arg.w.count = 0;
 		arg.w.cookie = cb->args[2];
-		tp->ops->walk(tp, &arg.w);
+		tp->ops->walk(tp, &arg.w, true);
 		cb->args[2] = arg.w.cookie;
 		cb->args[1] = arg.w.count + 1;
 		if (arg.w.stop)
@@ -2212,7 +2238,7 @@ static int tc_chain_tmplt_add(struct tcf_chain *chain, struct net *net,
 	if (!tca[TCA_KIND])
 		return 0;
 
-	ops = tcf_proto_lookup_ops(nla_data(tca[TCA_KIND]));
+	ops = tcf_proto_lookup_ops(nla_data(tca[TCA_KIND]), true);
 	if (IS_ERR(ops))
 		return PTR_ERR(ops);
 	if (!ops->tmplt_create || !ops->tmplt_destroy || !ops->tmplt_dump) {
@@ -2346,6 +2372,8 @@ replay:
 				RTM_NEWCHAIN, false);
 		break;
 	case RTM_DELCHAIN:
+		tfilter_notify_chain(net, skb, block, q, parent, n,
+				     chain, RTM_DELTFILTER, true);
 		/* Flush the chain first as the user requested chain removal. */
 		tcf_chain_flush(chain);
 		/* In case the chain was successfully deleted, put a reference

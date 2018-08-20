@@ -1782,7 +1782,7 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 			arg.w.fn = tcf_node_bind;
 			arg.classid = clid;
 			arg.cl = new_cl;
-			tp->ops->walk(tp, &arg.w);
+			tp->ops->walk(tp, &arg.w, true);
 		}
 	}
 }
