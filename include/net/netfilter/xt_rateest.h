@@ -14,6 +14,9 @@ struct xt_rateest {
 	unsigned int			refcnt;
 	struct gnet_estimator		params;
 	struct rcu_head			rcu;
+
+	/* keep this field far away to speedup xt_rateest_mt() */
+	struct net_rate_estimator __rcu *rate_est;
 };
 
 struct xt_rateest *xt_rateest_lookup(const char *name);

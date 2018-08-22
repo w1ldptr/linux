@@ -82,9 +82,13 @@ struct netdev_queue *dev_ingress_queue_create(struct net_device *dev);
 #ifdef CONFIG_NET_CLS_ACT
 void net_inc_ingress_queue(void);
 void net_dec_ingress_queue(void);
+
+void net_inc_egress_queue(void);
+void net_dec_egress_queue(void);
 #endif
 
 extern void rtnetlink_init(void);
+void rtnl_kfree_skbs(struct sk_buff *head, struct sk_buff *tail);
 extern void __rtnl_unlock(void);
 
 #define ASSERT_RTNL() do { \

@@ -628,14 +628,16 @@ static int parse_tc_nic_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 				u32 *action, u32 *flow_tag)
 {
 	const struct tc_action *a;
+	LIST_HEAD(actions);
 
-	if (tc_no_actions(exts))
+	if (!tcf_exts_has_actions(exts))
 		return -EINVAL;
 
 	*flow_tag = MLX5_FS_DEFAULT_FLOW_TAG;
 	*action = 0;
 
-	tc_for_each_action(a, exts) {
+	tcf_exts_to_list(exts, &actions);
+	list_for_each_entry(a, &actions, list) {
 		/* Only support a single action per rule */
 		if (*action)
 			return -EINVAL;
@@ -917,16 +919,18 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 	struct mlx5_esw_flow_attr *attr = flow->attr;
 	struct ip_tunnel_info *info = NULL;
 	const struct tc_action *a;
+	LIST_HEAD(actions);
 	bool encap = false;
 	int err;
 
-	if (tc_no_actions(exts))
+	if (!tcf_exts_has_actions(exts))
 		return -EINVAL;
 
 	memset(attr, 0, sizeof(*attr));
 	attr->in_rep = priv->ppriv;
 
-	tc_for_each_action(a, exts) {
+	tcf_exts_to_list(exts, &actions);
+	list_for_each_entry(a, &actions, list) {
 		if (is_tcf_gact_shot(a)) {
 			attr->action |= MLX5_FLOW_CONTEXT_ACTION_DROP |
 					MLX5_FLOW_CONTEXT_ACTION_COUNT;
@@ -1002,7 +1006,7 @@ int mlx5e_configure_flower(struct mlx5e_priv *priv, __be16 protocol,
 {
 	struct mlx5e_tc_table *tc = &priv->fs.tc;
 	int err, attr_size = 0;
-	u32 flow_tag, action;
+	u32 flow_tag = 0, action = 0;
 	struct mlx5e_tc_flow *flow;
 	struct mlx5_flow_spec *spec;
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
@@ -1088,7 +1092,6 @@ int mlx5e_stats_flower(struct mlx5e_priv *priv,
 {
 	struct mlx5e_tc_table *tc = &priv->fs.tc;
 	struct mlx5e_tc_flow *flow;
-	struct tc_action *a;
 	struct mlx5_fc *counter;
 	u64 bytes;
 	u64 packets;
@@ -1107,8 +1110,7 @@ int mlx5e_stats_flower(struct mlx5e_priv *priv,
 
 	preempt_disable();
 
-	tc_for_each_action(a, f->exts)
-		tcf_action_stats_update(a, bytes, packets, lastuse);
+	tcf_exts_stats_update(f->exts, bytes, packets, lastuse);
 
 	preempt_enable();
 

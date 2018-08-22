@@ -5,6 +5,9 @@
 #include <linux/ktime.h>
 #include <linux/if_vlan.h>
 #include <net/sch_generic.h>
+#include <uapi/linux/pkt_sched.h>
+
+#define DEFAULT_TX_QUEUE_LEN	1000
 
 struct qdisc_walker {
 	int	stop;
@@ -61,17 +64,18 @@ psched_tdiff_bounded(psched_time_t tv1, psched_time_t tv2, psched_time_t bound)
 }
 
 struct qdisc_watchdog {
+	u64		last_expires;
 	struct hrtimer	timer;
 	struct Qdisc	*qdisc;
 };
 
 void qdisc_watchdog_init(struct qdisc_watchdog *wd, struct Qdisc *qdisc);
-void qdisc_watchdog_schedule_ns(struct qdisc_watchdog *wd, u64 expires, bool throttle);
+void qdisc_watchdog_schedule_ns(struct qdisc_watchdog *wd, u64 expires);
 
 static inline void qdisc_watchdog_schedule(struct qdisc_watchdog *wd,
 					   psched_time_t expires)
 {
-	qdisc_watchdog_schedule_ns(wd, PSCHED_TICKS2NS(expires), true);
+	qdisc_watchdog_schedule_ns(wd, PSCHED_TICKS2NS(expires));
 }
 
 void qdisc_watchdog_cancel(struct qdisc_watchdog *wd);
@@ -89,15 +93,15 @@ int unregister_qdisc(struct Qdisc_ops *qops);
 void qdisc_get_default(char *id, size_t len);
 int qdisc_set_default(const char *id);
 
-void qdisc_list_add(struct Qdisc *q);
-void qdisc_list_del(struct Qdisc *q);
+void qdisc_hash_add(struct Qdisc *q, bool invisible);
+void qdisc_hash_del(struct Qdisc *q);
 struct Qdisc *qdisc_lookup(struct net_device *dev, u32 handle);
 struct Qdisc *qdisc_lookup_class(struct net_device *dev, u32 handle);
 struct qdisc_rate_table *qdisc_get_rtab(struct tc_ratespec *r,
 					struct nlattr *tab);
 void qdisc_put_rtab(struct qdisc_rate_table *tab);
 void qdisc_put_stab(struct qdisc_size_table *tab);
-void qdisc_warn_nonwc(char *txt, struct Qdisc *qdisc);
+void qdisc_warn_nonwc(const char *txt, struct Qdisc *qdisc);
 int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 		    struct net_device *dev, struct netdev_queue *txq,
 		    spinlock_t *root_lock, bool validate);
@@ -109,11 +113,6 @@ static inline void qdisc_run(struct Qdisc *q)
 	if (qdisc_run_begin(q))
 		__qdisc_run(q);
 }
-
-int tc_classify_compat(struct sk_buff *skb, const struct tcf_proto *tp,
-		       struct tcf_result *res);
-int tc_classify(struct sk_buff *skb, const struct tcf_proto *tp,
-		struct tcf_result *res);
 
 static inline __be16 tc_skb_protocol(const struct sk_buff *skb)
 {
@@ -132,6 +131,19 @@ static inline __be16 tc_skb_protocol(const struct sk_buff *skb)
 static inline unsigned int psched_mtu(const struct net_device *dev)
 {
 	return dev->mtu + dev->hard_header_len;
+}
+
+static inline bool is_classid_clsact_ingress(u32 classid)
+{
+	/* This also returns true for ingress qdisc */
+	return TC_H_MAJ(classid) == TC_H_MAJ(TC_H_CLSACT) &&
+	       TC_H_MIN(classid) != TC_H_MIN(TC_H_MIN_EGRESS);
+}
+
+static inline bool is_classid_clsact_egress(u32 classid)
+{
+	return TC_H_MAJ(classid) == TC_H_MAJ(TC_H_CLSACT) &&
+	       TC_H_MIN(classid) == TC_H_MIN(TC_H_MIN_EGRESS);
 }
 
 #endif

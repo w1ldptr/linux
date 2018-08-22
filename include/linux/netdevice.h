@@ -53,6 +53,7 @@
 #include <uapi/linux/netdevice.h>
 #include <uapi/linux/if_bonding.h>
 #include <uapi/linux/pkt_cls.h>
+#include <linux/hashtable.h>
 
 #include <linux/rh_kabi.h>
 
@@ -806,11 +807,12 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
 /* These structures hold the attributes of qdisc and classifiers
  * that are being passed to the netdevice through the setup_tc op.
  */
-enum {
+enum tc_setup_type {
 	TC_SETUP_MQPRIO,
 	TC_SETUP_CLSU32,
 	TC_SETUP_CLSFLOWER,
-	TC_SETUP_MATCHALL,
+	TC_SETUP_CLSMATCHALL,
+	TC_SETUP_CLSBPF,
 };
 
 struct tc_cls_u32_offload;
@@ -822,6 +824,7 @@ struct tc_to_netdev {
 		struct tc_cls_u32_offload *cls_u32;
 		struct tc_cls_flower_offload *cls_flower;
 		struct tc_cls_matchall_offload *cls_mall;
+		struct tc_cls_bpf_offload *cls_bpf;
 	};
 	bool egress_dev;
 };
@@ -931,6 +934,13 @@ struct net_device_ops_extended {
 	int			(*ndo_get_offload_stats)(int attr_id,
 							 const struct net_device *dev,
 							 void *attr_data);
+        /*
+	 * RHEL: Note that this callback is not part of kABI and its prototype
+	 * and semantic can be changed across releases.
+	 */
+        int			(*ndo_setup_tc_rh)(struct net_device *dev,
+						   enum tc_setup_type type,
+						   void *type_data);
 };
 
 /*
@@ -1906,16 +1916,48 @@ struct net_device {
  *	@ndisc_ops:	Includes callbacks for different IPv6 neighbour
  *			discovery handling. Necessary for e.g. 6LoWPAN.
  *
+ *	@min_mtu:	Interface Minimum MTU value
+ *	@max_mtu:	Interface Maximum MTU value
+ *	RHEL note: These bounds are only checked when the old
+ *		.ndo_change_mtu_rh74 handler is *not* provided.
+ *		See dev_set_mtu() in net/core/dev.c
+ *	@needs_free_netdev:	Should unregister perform free_netdev?
+ *	@priv_destructor:	Called from unregister
  */
 struct net_device_extended {
 #if IS_ENABLED(CONFIG_IPV6)
 	const struct ndisc_ops *ndisc_ops;
+#endif
+	unsigned int		min_mtu;
+	unsigned int		max_mtu;
+	struct list_head	ptype_all;
+	struct list_head	ptype_specific;
+
+	bool needs_free_netdev;
+	void (*priv_destructor)(struct net_device *dev);
+#ifdef CONFIG_NET_CLS_ACT
+	struct tcf_proto __rcu	*egress_cl_list;
+#endif
+#ifdef CONFIG_NET_SCHED
+	DECLARE_HASHTABLE	(qdisc_hash, 4);
 #endif
 };
 
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 
 #define	NETDEV_ALIGN		32
+
+static inline
+bool __rh_has_ndo_setup_tc(const struct net_device *dev)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	return (get_ndo_ext(ops, ndo_setup_tc_rh) ||
+		ops->ndo_setup_tc_rh72) ? true : false;
+}
+
+int __rh_call_ndo_setup_tc(struct net_device *dev, enum tc_setup_type type,
+			   void *type_data);
 
 static inline
 int netdev_get_prio_tc_map(const struct net_device *dev, u32 prio)
@@ -3792,6 +3834,7 @@ extern int		netdev_max_backlog;
 extern int		netdev_tstamp_prequeue;
 extern int		weight_p;
 extern int		bpf_jit_enable;
+extern int		dev_tx_weight;
 
 bool netdev_has_upper_dev(struct net_device *dev, struct net_device *upper_dev);
 bool netdev_has_any_upper_dev(struct net_device *dev);

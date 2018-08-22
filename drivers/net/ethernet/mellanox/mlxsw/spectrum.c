@@ -1225,9 +1225,10 @@ static int mlxsw_sp_port_add_cls_matchall(struct mlxsw_sp_port *mlxsw_sp_port,
 {
 	struct mlxsw_sp_port_mall_tc_entry *mall_tc_entry;
 	const struct tc_action *a;
+	LIST_HEAD(actions);
 	int err;
 
-	if (!tc_single_action(cls->exts)) {
+	if (!tcf_exts_has_one_action(cls->exts)) {
 		netdev_err(mlxsw_sp_port->dev, "only singular actions are supported\n");
 		return -EOPNOTSUPP;
 	}
@@ -1237,7 +1238,8 @@ static int mlxsw_sp_port_add_cls_matchall(struct mlxsw_sp_port *mlxsw_sp_port,
 		return -ENOMEM;
 	mall_tc_entry->cookie = cls->cookie;
 
-	a = list_first_entry(&cls->exts->actions, struct tc_action, list);
+	tcf_exts_to_list(cls->exts, &actions);
+	a = list_first_entry(&actions, struct tc_action, list);
 
 	if (is_tcf_mirred_egress_mirror(a) && protocol == htons(ETH_P_ALL)) {
 		struct mlxsw_sp_port_mall_mirror_tc_entry *mirror;
@@ -1293,7 +1295,7 @@ static int mlxsw_sp_setup_tc(struct net_device *dev, u32 handle,
 	bool ingress = TC_H_MAJ(handle) == TC_H_MAJ(TC_H_INGRESS);
 
 	switch (tc->type) {
-	case TC_SETUP_MATCHALL:
+	case TC_SETUP_CLSMATCHALL:
 		switch (tc->cls_mall->command) {
 		case TC_CLSMATCHALL_REPLACE:
 			return mlxsw_sp_port_add_cls_matchall(mlxsw_sp_port,

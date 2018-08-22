@@ -77,7 +77,7 @@ struct teql_sched_data {
 /* "teql*" qdisc routines */
 
 static int
-teql_enqueue(struct sk_buff *skb, struct Qdisc *sch)
+teql_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff **to_free)
 {
 	struct net_device *dev = qdisc_dev(sch);
 	struct teql_sched_data *q = qdisc_priv(sch);
@@ -87,7 +87,7 @@ teql_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		return NET_XMIT_SUCCESS;
 	}
 
-	return qdisc_drop(skb, sch);
+	return qdisc_drop(skb, sch, to_free);
 }
 
 static struct sk_buff *
@@ -120,13 +120,6 @@ teql_peek(struct Qdisc *sch)
 {
 	/* teql is meant to be used as root qdisc */
 	return NULL;
-}
-
-static inline void
-teql_neigh_release(struct neighbour *n)
-{
-	if (n)
-		neigh_release(n);
 }
 
 static void
@@ -408,8 +401,9 @@ static int teql_master_close(struct net_device *dev)
 	return 0;
 }
 
-static struct rtnl_link_stats64 *teql_master_stats64(struct net_device *dev,
-						     struct rtnl_link_stats64 *stats)
+#if 0
+static void teql_master_stats64(struct net_device *dev,
+				struct rtnl_link_stats64 *stats)
 {
 	struct teql_master *m = netdev_priv(dev);
 
@@ -417,8 +411,8 @@ static struct rtnl_link_stats64 *teql_master_stats64(struct net_device *dev,
 	stats->tx_bytes		= m->tx_bytes;
 	stats->tx_errors	= m->tx_errors;
 	stats->tx_dropped	= m->tx_dropped;
-	return stats;
 }
+#endif
 
 static int teql_master_mtu(struct net_device *dev, int new_mtu)
 {
@@ -444,8 +438,8 @@ static const struct net_device_ops teql_netdev_ops = {
 	.ndo_open	= teql_master_open,
 	.ndo_stop	= teql_master_close,
 	.ndo_start_xmit	= teql_master_xmit,
-	.ndo_get_stats64 = teql_master_stats64,
-	.ndo_change_mtu	= teql_master_mtu,
+/* 	.ndo_get_stats64 = teql_master_stats64, */
+	.ndo_change_mtu = teql_master_mtu,
 };
 
 static __init void teql_master_setup(struct net_device *dev)

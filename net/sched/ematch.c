@@ -228,6 +228,7 @@ static int tcf_em_validate(struct tcf_proto *tp,
 				 * to replay the request.
 				 */
 				module_put(em->ops->owner);
+				em->ops = NULL;
 				err = -EAGAIN;
 			}
 #endif
@@ -528,9 +529,12 @@ pop_stack:
 		match_idx = stack[--stackp];
 		cur_match = tcf_em_get_match(tree, match_idx);
 
-		if (tcf_em_early_end(cur_match, res))
+		if (tcf_em_is_inverted(cur_match))
+			res = !res;
+
+		if (tcf_em_early_end(cur_match, res)) {
 			goto pop_stack;
-		else {
+		} else {
 			match_idx++;
 			goto proceed;
 		}

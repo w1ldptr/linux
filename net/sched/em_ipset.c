@@ -28,7 +28,8 @@ static int em_ipset_change(struct net *net, void *data, int data_len,
 	if (data_len != sizeof(*set))
 		return -EINVAL;
 
-	index = ip_set_nfnl_get_byindex(set->index);
+/* 	index = ip_set_nfnl_get_byindex(net, set->index); */
+	index = 0;
 	if (index == IPSET_INVALID_ID)
 		return -ENOENT;
 
@@ -37,7 +38,7 @@ static int em_ipset_change(struct net *net, void *data, int data_len,
 	if (em->data)
 		return 0;
 
-	ip_set_nfnl_put(index);
+/* 	ip_set_nfnl_put(net, index); */
 	return -ENOMEM;
 }
 
@@ -45,7 +46,7 @@ static void em_ipset_destroy(struct tcf_ematch *em)
 {
 	const struct xt_set_info *set = (const void *) em->data;
 	if (set) {
-		ip_set_nfnl_put(set->index);
+/* 		ip_set_nfnl_put(em->net, set->index); */
 		kfree((void *) em->data);
 	}
 }
@@ -92,8 +93,8 @@ static int em_ipset_match(struct sk_buff *skb, struct tcf_ematch *em,
 
 	rcu_read_lock();
 
-	if (dev && skb->skb_iif)
-		indev = dev_get_by_index_rcu(dev_net(dev), skb->skb_iif);
+	if (skb->skb_iif)
+		indev = dev_get_by_index_rcu(em->net, skb->skb_iif);
 
 	acpar.in      = indev ? indev : dev;
 	acpar.out     = dev;
