@@ -957,13 +957,28 @@ errout_qdisc:
 	return ERR_PTR(err);
 }
 
-static void tcf_block_release(struct Qdisc *q, struct tcf_block *block)
+static void __tcf_block_release(struct Qdisc *q, struct tcf_block *block,
+				bool rtnl_held)
 {
 	if (!IS_ERR_OR_NULL(block))
 		tcf_block_refcnt_put(block);
 
-	if (q)
-		qdisc_put(q);
+	if (q) {
+		if (rtnl_held)
+			qdisc_put(q);
+		else
+			qdisc_put_unlocked(q);
+	}
+}
+
+static void tcf_block_release(struct Qdisc *q, struct tcf_block *block,
+			      bool *rtnl_held)
+{
+	if (*rtnl_held) {
+		rtnl_unlock();
+		*rtnl_held = false;
+	}
+	__tcf_block_release(q, block, false);
 }
 
 struct tcf_block_owner_item {
@@ -1621,7 +1636,7 @@ static int tc_new_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	void *fh;
 	int err;
 	int tp_created;
-	bool rtnl_held = true;
+	bool rtnl_held = false;
 
 	if (!netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
@@ -1768,7 +1783,7 @@ errout:
 		if (!tp_created)
 			tcf_chain_put(chain);
 	}
-	tcf_block_release(q, block);
+	tcf_block_release(q, block, &rtnl_held);
 	if (err == -EAGAIN) {
 		/* Take rtnl lock in case EAGAIN is caused by concurrent flush
 		 * of target chain.
@@ -1801,7 +1816,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	unsigned long cl = 0;
 	void *fh = NULL;
 	int err;
-	bool rtnl_held = true;
+	bool rtnl_held = false;
 
 	if (!netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
@@ -1906,7 +1921,7 @@ errout:
 			tcf_proto_put(tp);
 		tcf_chain_put(chain);
 	}
-	tcf_block_release(q, block);
+	tcf_block_release(q, block, &rtnl_held);
 	return err;
 
 errout_locked:
@@ -1931,7 +1946,7 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	unsigned long cl = 0;
 	void *fh = NULL;
 	int err;
-	bool rtnl_held = true;
+	bool rtnl_held = false;
 
 	err = nlmsg_parse(n, sizeof(*t), tca, TCA_MAX, NULL);
 	if (err < 0)
@@ -1997,7 +2012,7 @@ errout:
 			tcf_proto_put(tp);
 		tcf_chain_put(chain);
 	}
-	tcf_block_release(q, block);
+	tcf_block_release(q, block, &rtnl_held);
 	return err;
 }
 
@@ -2438,7 +2453,7 @@ replay:
 errout:
 	tcf_chain_put(chain);
 errout_block:
-	tcf_block_release(q, block);
+	__tcf_block_release(q, block, true);
 	if (err == -EAGAIN)
 		/* Replay the request. */
 		goto replay;
@@ -2766,10 +2781,12 @@ static int __init tc_filter_init(void)
 	if (err)
 		goto err_register_pernet_subsys;
 
-	rtnl_register(PF_UNSPEC, RTM_NEWTFILTER, tc_new_tfilter, NULL, 0);
-	rtnl_register(PF_UNSPEC, RTM_DELTFILTER, tc_del_tfilter, NULL, 0);
+	rtnl_register(PF_UNSPEC, RTM_NEWTFILTER, tc_new_tfilter, NULL,
+		      RTNL_FLAG_DOIT_UNLOCKED);
+	rtnl_register(PF_UNSPEC, RTM_DELTFILTER, tc_del_tfilter, NULL,
+		      RTNL_FLAG_DOIT_UNLOCKED);
 	rtnl_register(PF_UNSPEC, RTM_GETTFILTER, tc_get_tfilter,
-		      tc_dump_tfilter, 0);
+		      tc_dump_tfilter, RTNL_FLAG_DOIT_UNLOCKED);
 	rtnl_register(PF_UNSPEC, RTM_NEWCHAIN, tc_ctl_chain, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_DELCHAIN, tc_ctl_chain, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_GETCHAIN, tc_ctl_chain,
