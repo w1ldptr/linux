@@ -637,28 +637,43 @@ static struct tcf_block *tcf_block_refcnt_get(struct net *net, u32 block_index)
 	return block;
 }
 
+struct tcf_chain *
+tcf_get_next_chain(struct tcf_block *block, struct tcf_chain *iter)
+{
+	struct tcf_chain *chain;
+
+	spin_lock(&block->lock);
+	if (iter)
+		chain = list_is_last(&iter->list, &block->chain_list) ?
+			NULL : list_next_entry(iter, list);
+	else
+		chain = list_first_entry_or_null(&block->chain_list,
+						 struct tcf_chain, list);
+
+	/* skip all action-only chains */
+	while (chain && tcf_chain_held_by_acts_only(chain))
+		chain = list_is_last(&chain->list, &block->chain_list) ?
+			NULL : list_next_entry(chain, list);
+
+	if (chain)
+		tcf_chain_hold(chain);
+	spin_unlock(&block->lock);
+
+	if (iter)
+		tcf_chain_put(iter);
+
+	return chain;
+}
+EXPORT_SYMBOL(tcf_get_next_chain);
+
 static void tcf_block_flush_all_chains(struct tcf_block *block)
 {
 	struct tcf_chain *chain;
 
-	/* Hold a refcnt for all chains, so that they don't disappear
-	 * while we are iterating.
-	 */
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_hold(chain);
-
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_flush(chain);
-}
-
-static void tcf_block_put_all_chains(struct tcf_block *block)
-{
-	struct tcf_chain *chain, *tmp;
-
-	/* At this point, all the chains should have refcnt >= 1. */
-	list_for_each_entry_safe(chain, tmp, &block->chain_list, list) {
+	chain = NULL;
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		tcf_chain_put_explicitly_created(chain);
-		tcf_chain_put(chain);
+		tcf_chain_flush(chain);
 	}
 }
 
@@ -677,8 +692,6 @@ static void __tcf_block_put(struct tcf_block *block, struct Qdisc *q,
 		spin_unlock(&block->lock);
 		if (tcf_block_shared(block))
 			tcf_block_remove(block, block->net);
-		if (!free_block)
-			tcf_block_flush_all_chains(block);
 
 		if (q)
 			tcf_block_offload_unbind(block, q, ei);
@@ -686,7 +699,7 @@ static void __tcf_block_put(struct tcf_block *block, struct Qdisc *q,
 		if (free_block)
 			kfree_rcu(block, rcu);
 		else
-			tcf_block_put_all_chains(block);
+			tcf_block_flush_all_chains(block);
 	} else if (q) {
 		tcf_block_offload_unbind(block, q, ei);
 	}
@@ -1008,11 +1021,11 @@ static int
 tcf_block_playback_offloads(struct tcf_block *block, tc_setup_cb_t *cb,
 			    void *cb_priv, bool add, bool offload_in_use)
 {
-	struct tcf_chain *chain;
+	struct tcf_chain *chain = NULL;
 	struct tcf_proto *tp;
 	int err;
 
-	list_for_each_entry(chain, &block->chain_list, list) {
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		for (tp = rtnl_dereference(chain->filter_chain); tp;
 		     tp = rtnl_dereference(tp->next)) {
 			if (tp->ops->reoffload) {
@@ -1029,6 +1042,7 @@ tcf_block_playback_offloads(struct tcf_block *block, tc_setup_cb_t *cb,
 	return 0;
 
 err_playback_remove:
+	tcf_chain_put(chain);
 	tcf_block_playback_offloads(block, cb, cb_priv, false, offload_in_use);
 	return err;
 }
@@ -1822,12 +1836,14 @@ static int tc_dump_tfilter(struct sk_buff *skb, struct netlink_callback *cb)
 	index_start = cb->args[0];
 	index = 0;
 
-	list_for_each_entry(chain, &block->chain_list, list) {
+	chain = NULL;
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		if (tca[TCA_CHAIN] &&
 		    nla_get_u32(tca[TCA_CHAIN]) != chain->index)
 			continue;
 		if (!tcf_chain_dump(chain, q, parent, skb, cb,
 				    index_start, &index)) {
+			tcf_chain_put(chain);
 			err = -EMSGSIZE;
 			break;
 		}
@@ -2098,7 +2114,7 @@ static int tc_dump_chain(struct sk_buff *skb, struct netlink_callback *cb)
 	struct nlattr *tca[TCA_MAX + 1];
 	struct Qdisc *q = NULL;
 	struct tcf_block *block;
-	struct tcf_chain *chain;
+	struct tcf_chain *chain = NULL;
 	struct tcmsg *tcm = nlmsg_data(cb->nlh);
 	long index_start;
 	long index;
@@ -2161,7 +2177,7 @@ static int tc_dump_chain(struct sk_buff *skb, struct netlink_callback *cb)
 	index_start = cb->args[0];
 	index = 0;
 
-	list_for_each_entry(chain, &block->chain_list, list) {
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		if ((tca[TCA_CHAIN] &&
 		     nla_get_u32(tca[TCA_CHAIN]) != chain->index))
 			continue;
@@ -2169,8 +2185,6 @@ static int tc_dump_chain(struct sk_buff *skb, struct netlink_callback *cb)
 			index++;
 			continue;
 		}
-		if (tcf_chain_held_by_acts_only(chain))
-			continue;
 		err = tc_chain_fill_node(chain, net, skb, block,
 					 NETLINK_CB(cb->skb).portid,
 					 cb->nlh->nlmsg_seq, NLM_F_MULTI,

@@ -1762,8 +1762,8 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 			   unsigned long new_cl)
 {
 	const struct Qdisc_class_ops *cops = q->ops->cl_ops;
+	struct tcf_chain *chain = NULL;
 	struct tcf_block *block;
-	struct tcf_chain *chain;
 	unsigned long cl;
 
 	cl = cops->find(q, portid);
@@ -1772,7 +1772,7 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 	block = cops->tcf_block(q, cl);
 	if (!block)
 		return;
-	list_for_each_entry(chain, &block->chain_list, list) {
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		struct tcf_proto *tp;
 
 		for (tp = rtnl_dereference(chain->filter_chain);
