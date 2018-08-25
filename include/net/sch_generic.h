@@ -342,6 +342,10 @@ struct tcf_chain {
 };
 
 struct tcf_block {
+	/* Lock protects tcf_block and lifetime-management data of chains
+	 * attached to the block (refcnt, action_refcnt, explicitly_created).
+	 */
+	spinlock_t lock;
 	struct list_head chain_list;
 	u32 index; /* block index for shared blocks */
 	refcount_t refcnt;

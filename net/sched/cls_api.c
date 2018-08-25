@@ -210,6 +210,10 @@ static void tcf_proto_destroy(struct tcf_proto *tp)
 	tc_queue_proto_work(&tp->work);
 }
 
+#define ASSERT_BLOCK_LOCKED(block)					\
+	WARN_ONCE(!spin_is_locked(&(block)->lock),		\
+		  "BLOCK: assertion failed at %s (%d)\n", __FILE__,  __LINE__)
+
 struct tcf_filter_chain_list_item {
 	struct list_head list;
 	tcf_chain_head_change_t *chain_head_change;
@@ -221,7 +225,9 @@ static struct tcf_chain *tcf_chain_create(struct tcf_block *block,
 {
 	struct tcf_chain *chain;
 
-	chain = kzalloc(sizeof(*chain), GFP_KERNEL);
+	ASSERT_BLOCK_LOCKED(block);
+
+	chain = kzalloc(sizeof(*chain), GFP_ATOMIC);
 	if (!chain)
 		return NULL;
 	list_add_tail(&chain->list, &block->chain_list);
@@ -249,17 +255,36 @@ static void tcf_chain0_head_change(struct tcf_chain *chain,
 
 	if (chain->index)
 		return;
+
+	spin_lock(&block->lock);
 	list_for_each_entry(item, &block->chain0.filter_chain_list, list)
 		tcf_chain_head_change_item(item, tp_head, true);
+	spin_unlock(&block->lock);
 }
 
-static void tcf_chain_destroy(struct tcf_chain *chain)
+/* Returns true if block can be safely freed. */
+
+static bool tcf_chain_detach(struct tcf_chain *chain)
 {
 	struct tcf_block *block = chain->block;
+
+	ASSERT_BLOCK_LOCKED(block);
 
 	list_del(&chain->list);
 	if (!chain->index)
 		block->chain0.chain = NULL;
+
+	if (list_empty(&block->chain_list) &&
+	    refcount_read(&block->refcnt) == 0)
+		return true;
+
+	return false;
+}
+
+static void tcf_chain_destroy(struct tcf_chain *chain, bool free_block)
+{
+	struct tcf_block *block = chain->block;
+
 	kfree(chain);
 	if (list_empty(&block->chain_list) && !refcount_read(&block->refcnt))
 		kfree_rcu(block, rcu);
@@ -267,11 +292,15 @@ static void tcf_chain_destroy(struct tcf_chain *chain)
 
 static void tcf_chain_hold(struct tcf_chain *chain)
 {
+	ASSERT_BLOCK_LOCKED(chain->block);
+
 	++chain->refcnt;
 }
 
 static bool tcf_chain_held_by_acts_only(struct tcf_chain *chain)
 {
+	ASSERT_BLOCK_LOCKED(chain->block);
+
 	/* In case all the references are action references, this
 	 * chain should not be shown to the user.
 	 */
@@ -282,6 +311,8 @@ static struct tcf_chain *tcf_chain_lookup(struct tcf_block *block,
 					  u32 chain_index)
 {
 	struct tcf_chain *chain;
+
+	ASSERT_BLOCK_LOCKED(block);
 
 	list_for_each_entry(chain, &block->chain_list, list) {
 		if (chain->index == chain_index)
@@ -297,30 +328,39 @@ static struct tcf_chain *__tcf_chain_get(struct tcf_block *block,
 					 u32 chain_index, bool create,
 					 bool by_act)
 {
-	struct tcf_chain *chain = tcf_chain_lookup(block, chain_index);
+	struct tcf_chain *chain = NULL;
+	bool is_first_reference;
 
+	spin_lock(&block->lock);
+	chain = tcf_chain_lookup(block, chain_index);
 	if (chain) {
 		tcf_chain_hold(chain);
 	} else {
 		if (!create)
-			return NULL;
+			goto errout;
 		chain = tcf_chain_create(block, chain_index);
 		if (!chain)
-			return NULL;
+			goto errout;
 	}
 
 	if (by_act)
 		++chain->action_refcnt;
+	is_first_reference = chain->refcnt - chain->action_refcnt == 1;
+	spin_unlock(&block->lock);
 
 	/* Send notification only in case we got the first
 	 * non-action reference. Until then, the chain acts only as
 	 * a placeholder for actions pointing to it and user ought
 	 * not know about them.
 	 */
-	if (chain->refcnt - chain->action_refcnt == 1 && !by_act)
+	if (is_first_reference && !by_act)
 		tc_chain_notify(chain, NULL, 0, NLM_F_CREATE | NLM_F_EXCL,
 				RTM_NEWCHAIN, false);
 
+	return chain;
+
+errout:
+	spin_unlock(&block->lock);
 	return chain;
 }
 
@@ -338,37 +378,59 @@ EXPORT_SYMBOL(tcf_chain_get_by_act);
 
 static void tc_chain_tmplt_del(struct tcf_chain *chain);
 
-static void __tcf_chain_put(struct tcf_chain *chain, bool by_act)
+static void __tcf_chain_put(struct tcf_chain *chain, bool by_act,
+			    bool explicitly_created)
 {
+	struct tcf_block *block = chain->block;
+	bool is_last, free_block = false;
+	unsigned int refcnt;
+
+	spin_lock(&block->lock);
+	if (explicitly_created) {
+		if (!chain->explicitly_created) {
+			spin_unlock(&block->lock);
+			return;
+		}
+		chain->explicitly_created = false;
+	}
+
 	if (by_act)
 		chain->action_refcnt--;
-	chain->refcnt--;
+
+	/* tc_chain_notify_delete can't be called while holding block lock.
+	 * However, when block is unlocked chain can be changed concurrently, so
+	 * save these to temporary variables.
+	 */
+	refcnt = --chain->refcnt;
+	is_last = refcnt - chain->action_refcnt == 0;
+	if (refcnt == 0)
+		free_block = tcf_chain_detach(chain);
+	spin_unlock(&block->lock);
 
 	/* The last dropped non-action reference will trigger notification. */
-	if (chain->refcnt - chain->action_refcnt == 0 && !by_act)
+	if (is_last && !by_act)
 		tc_chain_notify(chain, NULL, 0, 0, RTM_DELCHAIN, false);
 
-	if (chain->refcnt == 0) {
+	if (refcnt == 0) {
 		tc_chain_tmplt_del(chain);
-		tcf_chain_destroy(chain);
+		tcf_chain_destroy(chain, free_block);
 	}
 }
 
 static void tcf_chain_put(struct tcf_chain *chain)
 {
-	__tcf_chain_put(chain, false);
+	__tcf_chain_put(chain, false, false);
 }
 
 void tcf_chain_put_by_act(struct tcf_chain *chain)
 {
-	__tcf_chain_put(chain, true);
+	__tcf_chain_put(chain, true, false);
 }
 EXPORT_SYMBOL(tcf_chain_put_by_act);
 
 static void tcf_chain_put_explicitly_created(struct tcf_chain *chain)
 {
-	if (chain->explicitly_created)
-		tcf_chain_put(chain);
+	__tcf_chain_put(chain, false, true);
 }
 
 static void tcf_chain_flush(struct tcf_chain *chain)
@@ -376,6 +438,7 @@ static void tcf_chain_flush(struct tcf_chain *chain)
 	struct tcf_proto *tp = rtnl_dereference(chain->filter_chain);
 
 	tcf_chain0_head_change(chain, NULL);
+
 	while (tp) {
 		RCU_INIT_POINTER(chain->filter_chain, tp->next);
 		tcf_proto_destroy(tp);
@@ -449,8 +512,8 @@ static int
 tcf_chain0_head_change_cb_add(struct tcf_block *block,
 			      struct tcf_block_ext_info *ei)
 {
-	struct tcf_chain *chain0 = block->chain0.chain;
 	struct tcf_filter_chain_list_item *item;
+	struct tcf_chain *chain0;
 
 	item = kmalloc(sizeof(*item), GFP_KERNEL);
 	if (!item) {
@@ -458,9 +521,20 @@ tcf_chain0_head_change_cb_add(struct tcf_block *block,
 	}
 	item->chain_head_change = ei->chain_head_change;
 	item->chain_head_change_priv = ei->chain_head_change_priv;
-	if (chain0 && chain0->filter_chain)
-		tcf_chain_head_change_item(item, chain0->filter_chain, false);
+
+	spin_lock(&block->lock);
 	list_add(&item->list, &block->chain0.filter_chain_list);
+	chain0 = block->chain0.chain;
+	if (chain0)
+		tcf_chain_hold(chain0);
+	spin_unlock(&block->lock);
+
+	if (chain0) {
+		if (chain0->filter_chain)
+			tcf_chain_head_change_item(item, chain0->filter_chain, false);
+		tcf_chain_put(chain0);
+	}
+
 	return 0;
 }
 
@@ -468,20 +542,22 @@ static void
 tcf_chain0_head_change_cb_del(struct tcf_block *block,
 			      struct tcf_block_ext_info *ei)
 {
-	struct tcf_chain *chain0 = block->chain0.chain;
 	struct tcf_filter_chain_list_item *item;
 
+	spin_lock(&block->lock);
 	list_for_each_entry(item, &block->chain0.filter_chain_list, list) {
 		if ((!ei->chain_head_change && !ei->chain_head_change_priv) ||
 		    (item->chain_head_change == ei->chain_head_change &&
 		     item->chain_head_change_priv == ei->chain_head_change_priv)) {
-			if (chain0)
-				tcf_chain_head_change_item(item, NULL, false);
 			list_del(&item->list);
+			spin_unlock(&block->lock);
+
+			tcf_chain_head_change_item(item, NULL, false);
 			kfree(item);
 			return;
 		}
 	}
+	spin_unlock(&block->lock);
 	WARN_ON(1);
 }
 
@@ -525,6 +601,7 @@ static struct tcf_block *tcf_block_create(struct net *net, struct Qdisc *q,
 	if (!block) {
 		return ERR_PTR(-ENOMEM);
 	}
+	spin_lock_init(&block->lock);
 	INIT_LIST_HEAD(&block->chain_list);
 	INIT_LIST_HEAD(&block->cb_list);
 	INIT_LIST_HEAD(&block->owner_list);
@@ -588,7 +665,7 @@ static void tcf_block_put_all_chains(struct tcf_block *block)
 static void __tcf_block_put(struct tcf_block *block, struct Qdisc *q,
 			    struct tcf_block_ext_info *ei)
 {
-	if (refcount_dec_and_test(&block->refcnt)) {
+	if (refcount_dec_and_lock(&block->refcnt, &block->lock)) {
 		/* Flushing/putting all chains will cause the block to be
 		 * deallocated when last chain is freed. However, if chain_list
 		 * is empty, block has to be manually deallocated. After block
@@ -597,6 +674,7 @@ static void __tcf_block_put(struct tcf_block *block, struct Qdisc *q,
 		 */
 		bool free_block = list_empty(&block->chain_list);
 
+		spin_unlock(&block->lock);
 		if (tcf_block_shared(block))
 			tcf_block_remove(block, block->net);
 		if (!free_block)
@@ -1915,6 +1993,8 @@ replay:
 		err = -EINVAL;
 		goto errout_block;
 	}
+
+	spin_lock(&block->lock);
 	chain = tcf_chain_lookup(block, chain_index);
 	if (n->nlmsg_type == RTM_NEWCHAIN) {
 		if (chain) {
@@ -1925,38 +2005,58 @@ replay:
 				tcf_chain_hold(chain);
 			} else {
 				err = -EEXIST;
-				goto errout_block;
+				goto errout_block_locked;
 			}
 		} else {
 			if (!(n->nlmsg_flags & NLM_F_CREATE)) {
 				err = -ENOENT;
-				goto errout_block;
+				goto errout_block_locked;
 			}
 			chain = tcf_chain_create(block, chain_index);
 			if (!chain) {
 				err = -ENOMEM;
-				goto errout_block;
+				goto errout_block_locked;
 			}
 		}
 	} else {
 		if (!chain || tcf_chain_held_by_acts_only(chain)) {
 			err = -EINVAL;
-			goto errout_block;
+			goto errout_block_locked;
 		}
 		tcf_chain_hold(chain);
 	}
 
+	/* Code that requires block lock. */
 	switch (n->nlmsg_type) {
 	case RTM_NEWCHAIN:
-		err = tc_chain_tmplt_add(chain, net, tca);
-		if (err)
-			goto errout;
 		/* In case the chain was successfully added, take a reference
 		 * to the chain. This ensures that an empty chain
 		 * does not disappear at the end of this function.
 		 */
 		tcf_chain_hold(chain);
 		chain->explicitly_created = true;
+		break;
+	case RTM_DELCHAIN:
+		break;
+	case RTM_GETCHAIN:
+		break;
+	default:
+		spin_unlock(&block->lock);
+		err = -EOPNOTSUPP;
+		goto errout;
+	}
+
+	spin_unlock(&block->lock);
+
+	/* Code that doesn't require block lock. */
+	switch (n->nlmsg_type) {
+	case RTM_NEWCHAIN:
+		err = tc_chain_tmplt_add(chain, net, tca);
+		if (err) {
+			tcf_chain_put_explicitly_created(chain);
+			goto errout;
+		}
+
 		tc_chain_notify(chain, NULL, 0, NLM_F_CREATE | NLM_F_EXCL,
 				RTM_NEWCHAIN, false);
 		break;
@@ -1974,8 +2074,7 @@ replay:
 				      n->nlmsg_seq, n->nlmsg_type, true);
 		break;
 	default:
-		err = -EOPNOTSUPP;
-		goto errout;
+		break;
 	}
 
 errout:
@@ -1986,6 +2085,10 @@ errout_block:
 		/* Replay the request. */
 		goto replay;
 	return err;
+
+errout_block_locked:
+	spin_unlock(&block->lock);
+	goto errout_block;
 }
 
 /* called with RTNL */
