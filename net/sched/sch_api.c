@@ -1775,8 +1775,8 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		struct tcf_proto *tp;
 
-		for (tp = rtnl_dereference(chain->filter_chain);
-		     tp; tp = rtnl_dereference(tp->next)) {
+		for (tp = tcf_get_next_proto(chain, tp);
+		     tp; tp = tcf_get_next_proto(chain, tp)) {
 			struct tcf_bind_args arg = {};
 
 			arg.w.fn = tcf_node_bind;

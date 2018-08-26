@@ -687,6 +687,20 @@ tcf_get_next_chain(struct tcf_block *block, struct tcf_chain *iter)
 }
 EXPORT_SYMBOL(tcf_get_next_chain);
 
+struct tcf_proto *
+tcf_get_next_proto(struct tcf_chain *chain, struct tcf_proto *iter)
+{
+	struct tcf_proto *tp;
+
+	spin_lock(&chain->filter_chain_lock);
+	tp = tcf_chain_dereference(iter ? iter->next : chain->filter_chain,
+				   chain);
+	spin_unlock(&chain->filter_chain_lock);
+
+	return tp;
+}
+EXPORT_SYMBOL(tcf_get_next_proto);
+
 static void tcf_block_flush_all_chains(struct tcf_block *block)
 {
 	struct tcf_chain *chain;
@@ -1043,12 +1057,12 @@ tcf_block_playback_offloads(struct tcf_block *block, tc_setup_cb_t *cb,
 			    void *cb_priv, bool add, bool offload_in_use)
 {
 	struct tcf_chain *chain = NULL;
-	struct tcf_proto *tp;
+	struct tcf_proto *tp = NULL;
 	int err;
 
 	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
-		for (tp = rtnl_dereference(chain->filter_chain); tp;
-		     tp = rtnl_dereference(tp->next)) {
+		for (tp = tcf_get_next_proto(chain, NULL); tp;
+		     tp = tcf_get_next_proto(chain, tp)) {
 			if (tp->ops->reoffload) {
 				err = tp->ops->reoffload(tp, add, cb, cb_priv);
 				if (err && add)
@@ -1371,10 +1385,10 @@ static void tfilter_notify_chain(struct net *net, struct sk_buff *oskb,
 				 u32 parent, struct nlmsghdr *n,
 				 struct tcf_chain *chain, int event)
 {
-	struct tcf_proto *tp;
+	struct tcf_proto *tp = NULL;
 
-	for (tp = rtnl_dereference(chain->filter_chain);
-	     tp; tp = rtnl_dereference(tp->next))
+	for (tp = tcf_get_next_proto(chain, tp);
+	     tp; tp = tcf_get_next_proto(chain, tp))
 		tfilter_notify(net, oskb, n, tp, block,
 			       q, parent, NULL, event, false);
 }
@@ -1759,10 +1773,10 @@ static bool tcf_chain_dump(struct tcf_chain *chain, struct Qdisc *q, u32 parent,
 	struct tcf_block *block = chain->block;
 	struct tcmsg *tcm = nlmsg_data(cb->nlh);
 	struct tcf_dump_args arg;
-	struct tcf_proto *tp;
+	struct tcf_proto *tp = NULL;
 
-	for (tp = rtnl_dereference(chain->filter_chain);
-	     tp; tp = rtnl_dereference(tp->next), (*p_index)++) {
+	for (tp = tcf_get_next_proto(chain, tp);
+	     tp; tp = tcf_get_next_proto(chain, tp), (*p_index)++) {
 		if (*p_index < index_start)
 			continue;
 		if (TC_H_MAJ(tcm->tcm_info) &&
