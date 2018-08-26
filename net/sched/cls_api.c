@@ -463,9 +463,11 @@ static void __tcf_chain_put(struct tcf_chain *chain, bool by_act,
 	spin_unlock(&block->lock);
 
 	/* The last dropped non-action reference will trigger notification. */
-	if (is_last && !by_act)
+	if (is_last && !by_act) {
 		tc_chain_notify_delete(tmplt_ops, tmplt_priv, chain_index,
 				       block, NULL, 0, 0, false);
+		chain->flushing = false;
+	}
 
 	if (refcnt == 0) {
 		tc_chain_tmplt_del(tmplt_ops, tmplt_priv);
@@ -497,6 +499,7 @@ static void tcf_chain_flush(struct tcf_chain *chain)
 	tp = tcf_chain_dereference(chain->filter_chain, chain);
 	RCU_INIT_POINTER(chain->filter_chain, NULL);
 	tcf_chain0_head_change(chain, NULL);
+	chain->flushing = true;
 	spin_unlock(&chain->filter_chain_lock);
 
 	/* Wait for all rcu-protected users to finish. */
@@ -1303,15 +1306,20 @@ static struct tcf_proto *tcf_chain_tp_prev(struct tcf_chain *chain,
 	return tcf_chain_dereference(*chain_info->pprev, chain);
 }
 
-static void tcf_chain_tp_insert(struct tcf_chain *chain,
-				struct tcf_chain_info *chain_info,
-				struct tcf_proto *tp)
+static int tcf_chain_tp_insert(struct tcf_chain *chain,
+			       struct tcf_chain_info *chain_info,
+			       struct tcf_proto *tp)
 {
+	if (chain->flushing)
+		return -EAGAIN;
+
 	if (*chain_info->pprev == chain->filter_chain)
 		tcf_chain0_head_change(chain, tp);
 	tcf_proto_get(tp);
 	RCU_INIT_POINTER(tp->next, tcf_chain_tp_prev(chain, chain_info));
 	rcu_assign_pointer(*chain_info->pprev, tp);
+
+	return 0;
 }
 
 static void tcf_chain_tp_remove(struct tcf_chain *chain,
@@ -1342,18 +1350,22 @@ static struct tcf_proto *tcf_chain_tp_insert_unique(struct tcf_chain *chain,
 {
 	struct tcf_chain_info chain_info;
 	struct tcf_proto *tp_new;
+	int err = 0;
 
 	spin_lock(&chain->filter_chain_lock);
 
 	tp_new = tcf_chain_tp_find(chain, &chain_info,
 				   protocol, prio, false);
 	if (!tp_new)
-		tcf_chain_tp_insert(chain, &chain_info, tp);
+		err = tcf_chain_tp_insert(chain, &chain_info, tp);
 	spin_unlock(&chain->filter_chain_lock);
 
 	if (tp_new) {
 		tcf_proto_destroy(tp);
 		tp = tp_new;
+	} else if (err < 0) {
+		tcf_proto_destroy(tp);
+		tp = ERR_PTR(err);
 	}
 
 	return tp;
@@ -1651,11 +1663,15 @@ replay:
 
 		tp = tcf_chain_tp_insert_unique(chain, tp_new, protocol, prio);
 
-		/* tp insert function can return another tp instance, if it was
-		 * created concurrently.
-		 */
-		if (tp == tp_new)
+		if (IS_ERR(tp)) {
+			err = PTR_ERR(tp);
+			goto errout;
+		} else if (tp == tp_new) {
+			/* tp insert function can return another tp instance, if
+			 * it was created concurrently.
+			 */
 			tp_created = 1;
+		}
 	} else {
 		spin_unlock(&chain->filter_chain_lock);
 	}
