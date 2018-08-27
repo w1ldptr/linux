@@ -1347,7 +1347,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 			err = 0;
 			goto errout;
 		}
-		err = -EINVAL;
+		err = -ENOENT;
 		goto errout;
 	}
 
