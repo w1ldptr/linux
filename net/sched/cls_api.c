@@ -607,7 +607,7 @@ static struct tcf_block *tcf_block_find(struct net *net, struct Qdisc **q,
 	int err = 0;
 
 	if (ifindex == TCM_IFINDEX_MAGIC_BLOCK) {
-		block = tcf_block_lookup(net, block_index);
+		block = tcf_block_refcnt_get(net, block_index);
 		if (!block) {
 			return ERR_PTR(-EINVAL);
 		}
@@ -680,6 +680,14 @@ static struct tcf_block *tcf_block_find(struct net *net, struct Qdisc **q,
 			err = -EOPNOTSUPP;
 			goto errout_qdisc;
 		}
+
+		/* Always take reference to block in order to support execution
+		 * of rules update path of cls API without rtnl lock. Caller
+		 * must release block when it is finished using it. 'if' block
+		 * of this conditional obtain reference to block by calling
+		 * tcf_block_refcnt_get().
+		 */
+		refcount_inc(&block->refcnt);
 	}
 
 	return block;
@@ -694,6 +702,9 @@ errout_qdisc:
 
 static void tcf_block_release(struct Qdisc *q, struct tcf_block *block)
 {
+	if (!IS_ERR_OR_NULL(block))
+		tcf_block_refcnt_put(block);
+
 	if (q)
 		qdisc_put(q);
 }
@@ -762,21 +773,16 @@ int tcf_block_get_ext(struct tcf_block **p_block, struct Qdisc *q,
 {
 	struct net *net = qdisc_net(q);
 	struct tcf_block *block = NULL;
-	bool created = false;
 	int err;
 
-	if (ei->block_index) {
+	if (ei->block_index)
 		/* block_index not 0 means the shared block is requested */
-		block = tcf_block_lookup(net, ei->block_index);
-		if (block)
-			refcount_inc(&block->refcnt);
-	}
+		block = tcf_block_refcnt_get(net, ei->block_index);
 
 	if (!block) {
 		block = tcf_block_create(net, q, ei->block_index);
 		if (IS_ERR(block))
 			return PTR_ERR(block);
-		created = true;
 		if (tcf_block_shared(block)) {
 			err = tcf_block_insert(block, net);
 			if (err)
@@ -806,14 +812,8 @@ err_block_offload_bind:
 err_chain0_head_change_cb_add:
 	tcf_block_owner_del(block, q, ei->binder_type);
 err_block_owner_add:
-	if (created) {
-		if (tcf_block_shared(block))
-			tcf_block_remove(block, net);
 err_block_insert:
-		kfree_rcu(block, rcu);
-	} else {
-		refcount_dec(&block->refcnt);
-	}
+	tcf_block_refcnt_put(block);
 	return err;
 }
 EXPORT_SYMBOL(tcf_block_get_ext);
@@ -1666,7 +1666,7 @@ static int tc_dump_tfilter(struct sk_buff *skb, struct netlink_callback *cb)
 		return err;
 
 	if (tcm->tcm_ifindex == TCM_IFINDEX_MAGIC_BLOCK) {
-		block = tcf_block_lookup(net, tcm->tcm_block_index);
+		block = tcf_block_refcnt_get(net, tcm->tcm_block_index);
 		if (!block)
 			goto out;
 		/* If we work with block index, q is NULL and parent value
@@ -1725,6 +1725,8 @@ static int tc_dump_tfilter(struct sk_buff *skb, struct netlink_callback *cb)
 		}
 	}
 
+	if (tcm->tcm_ifindex == TCM_IFINDEX_MAGIC_BLOCK)
+		tcf_block_refcnt_put(block);
 	cb->args[0] = index;
 
 out:
@@ -1978,7 +1980,7 @@ static int tc_dump_chain(struct sk_buff *skb, struct netlink_callback *cb)
 		return err;
 
 	if (tcm->tcm_ifindex == TCM_IFINDEX_MAGIC_BLOCK) {
-		block = tcf_block_lookup(net, tcm->tcm_block_index);
+		block = tcf_block_refcnt_get(net, tcm->tcm_block_index);
 		if (!block)
 			goto out;
 		/* If we work with block index, q is NULL and parent value
@@ -2045,6 +2047,8 @@ static int tc_dump_chain(struct sk_buff *skb, struct netlink_callback *cb)
 		index++;
 	}
 
+	if (tcm->tcm_ifindex == TCM_IFINDEX_MAGIC_BLOCK)
+		tcf_block_refcnt_put(block);
 	cb->args[0] = index;
 
 out:
