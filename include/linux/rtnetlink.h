@@ -79,6 +79,11 @@ static inline struct netdev_queue *dev_ingress_queue(struct net_device *dev)
 	return rtnl_dereference(dev->ingress_queue);
 }
 
+static inline struct netdev_queue *dev_ingress_queue_rcu(struct net_device *dev)
+{
+	return rcu_dereference(dev->ingress_queue);
+}
+
 struct netdev_queue *dev_ingress_queue_create(struct net_device *dev);
 
 #ifdef CONFIG_NET_CLS_ACT
