@@ -29,17 +29,7 @@ obj-$(CONFIG_NET_ACT_TUNNEL_KEY)+= act_tunnel_key.o
 obj-$(CONFIG_NET_SCH_FIFO)	+= sch_fifo.o
 obj-$(CONFIG_NET_SCH_INGRESS)	+= sch_ingress.o 
 
-obj-$(CONFIG_NET_CLS_U32)	+= cls_u32.o
-obj-$(CONFIG_NET_CLS_ROUTE4)	+= cls_route.o
-obj-$(CONFIG_NET_CLS_FW)	+= cls_fw.o
-obj-$(CONFIG_NET_CLS_RSVP)	+= cls_rsvp.o
-obj-$(CONFIG_NET_CLS_TCINDEX)	+= cls_tcindex.o
-obj-$(CONFIG_NET_CLS_RSVP6)	+= cls_rsvp6.o
-obj-$(CONFIG_NET_CLS_BASIC)	+= cls_basic.o
-obj-$(CONFIG_NET_CLS_FLOW)	+= cls_flow.o
 obj-$(CONFIG_NET_CLS_CGROUP)	+= cls_cgroup.o
-obj-$(CONFIG_NET_CLS_BPF)	+= cls_bpf.o
 obj-$(CONFIG_NET_CLS_FLOWER)	+= cls_flower.o
-obj-$(CONFIG_NET_CLS_MATCHALL)	+= cls_matchall.o
 
 obj-y += rh_kabi.o
