@@ -3,6 +3,13 @@
 #define _LINUX_ATOMIC_H
 #include <asm/atomic.h>
 
+/* atomic_cmpxchg_relaxed */
+#ifndef atomic_cmpxchg_relaxed
+#define  atomic_cmpxchg_relaxed         atomic_cmpxchg
+#define  atomic_cmpxchg_acquire         atomic_cmpxchg
+#define  atomic_cmpxchg_release         atomic_cmpxchg
+#endif
+
 /*
  * Provide __deprecated wrappers for the new interface, avoid flag day changes.
  * We need the ugly external functions to break header recursion hell.
