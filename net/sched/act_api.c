@@ -1152,6 +1152,7 @@ static int tcf_action_delete(struct net *net, struct tc_action *actions[])
 		struct tcf_idrinfo *idrinfo = a->idrinfo;
 		u32 act_index = a->tcfa_index;
 
+		actions[i] = NULL;
 		if (tcf_action_put(a)) {
 			/* last reference, action was deleted concurrently */
 			module_put(ops->owner);
@@ -1163,7 +1164,6 @@ static int tcf_action_delete(struct net *net, struct tc_action *actions[])
 			if (ret < 0)
 				return ret;
 		}
-		actions[i] = NULL;
 	}
 	return 0;
 }
