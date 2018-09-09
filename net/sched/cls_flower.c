@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/rhashtable.h>
 #include <linux/workqueue.h>
+#include <linux/refcount.h>
 
 #include <linux/if_ether.h>
 #include <linux/in6.h>
@@ -97,6 +98,7 @@ struct cls_fl_filter {
 	u32 flags;
 	unsigned int in_hw_count;
 	struct rcu_work rwork;
+	refcount_t refcnt;
 };
 
 static const struct rhashtable_params mask_ht_params = {
@@ -345,6 +347,47 @@ static struct cls_fl_head *fl_head_dereference(struct tcf_proto *tp)
 	 * without protection provided by rtnl lock.
 	 */
 	return rcu_dereference_protected(tp->root, 1);
+}
+
+static void __fl_put(struct cls_fl_filter *f)
+{
+	if (!refcount_dec_and_test(&f->refcnt))
+		return;
+
+	if (tcf_exts_get_net(&f->exts))
+		tcf_queue_work(&f->rwork, fl_destroy_filter_work);
+	else
+		__fl_destroy_filter(f);
+}
+
+static struct cls_fl_filter *__fl_get(struct cls_fl_head *head, u32 handle)
+{
+	struct cls_fl_filter *f;
+
+	rcu_read_lock();
+	f = idr_find_ext(&head->handle_idr, handle);
+	if (f && !refcount_inc_not_zero(&f->refcnt))
+		f = NULL;
+	rcu_read_unlock();
+
+	return f;
+}
+
+static struct cls_fl_filter *fl_get_next_filter(struct tcf_proto *tp,
+						unsigned long *handle)
+{
+	struct cls_fl_head *head = fl_head_dereference(tp);
+	struct cls_fl_filter *f;
+
+	rcu_read_lock();
+	/* don't return filters that are being deleted */
+	while ((f = idr_get_next_ext(&head->handle_idr,
+				     handle)) != NULL &&
+	       !refcount_inc_not_zero(&f->refcnt))
+		++(*handle);
+	rcu_read_unlock();
+
+	return f;
 }
 
 static bool __fl_delete(struct tcf_proto *tp, struct cls_fl_filter *f)
