@@ -402,10 +402,7 @@ static bool __fl_delete(struct tcf_proto *tp, struct cls_fl_filter *f)
 	if (!tc_skip_hw(f->flags))
 		fl_hw_destroy_filter(tp, f);
 	tcf_unbind_filter(tp, &f->res);
-	if (async)
-		tcf_queue_work(&f->rwork, fl_destroy_filter_work);
-	else
-		__fl_destroy_filter(f);
+	__fl_put(f);
 
 	return last;
 }
@@ -439,11 +436,18 @@ static void fl_destroy(struct tcf_proto *tp, bool rtnl_held)
 	tcf_queue_work(&head->rwork, fl_destroy_sleepable);
 }
 
+static void fl_put(struct tcf_proto *tp, void *arg)
+{
+	struct cls_fl_filter *f = arg;
+
+	__fl_put(f);
+}
+
 static void *fl_get(struct tcf_proto *tp, u32 handle)
 {
 	struct cls_fl_head *head = fl_head_dereference(tp);
 
-	return idr_find_ext(&head->handle_idr, handle);
+	return __fl_get(head, handle);
 }
 
 static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
@@ -1025,12 +1029,16 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 	unsigned long idr_index;
 	int err;
 
-	if (!tca[TCA_OPTIONS])
-		return -EINVAL;
+	if (!tca[TCA_OPTIONS]) {
+		err = -EINVAL;
+		goto errout_fold;
+	}
 
 	tb = kcalloc(TCA_FLOWER_MAX + 1, sizeof(struct nlattr *), GFP_KERNEL);
-	if (!tb)
-		return -ENOBUFS;
+	if (!tb) {
+		err = -ENOBUFS;
+		goto errout_fold;
+	}
 
 	err = nla_parse_nested(tb, TCA_FLOWER_MAX, tca[TCA_OPTIONS], fl_policy);
 	if (err < 0)
@@ -1046,6 +1054,7 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 		err = -ENOBUFS;
 		goto errout_tb;
 	}
+	refcount_set(&fnew->refcnt, 1);
 
 	err = tcf_exts_init(&fnew->exts, TCA_FLOWER_ACT, 0);
 	if (err < 0)
@@ -1084,6 +1093,7 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 	if (!tc_in_hw(fnew->flags))
 		fnew->flags |= TCA_CLS_FLAGS_NOT_IN_HW;
 
+	refcount_inc(&fnew->refcnt);
 	if (fold) {
 		fnew->handle = handle;
 
@@ -1109,7 +1119,11 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 			fl_hw_destroy_filter(tp, fold);
 		tcf_unbind_filter(tp, &fold->res);
 		tcf_exts_get_net(&fold->exts);
-		tcf_queue_work(&fold->rwork, fl_destroy_filter_work);
+		/* Caller holds reference to fold, so refcnt is always > 0
+		 * after this.
+		 */
+		refcount_dec(&fold->refcnt);
+		__fl_put(fold);
 	} else {
 		if (handle)
 			/* user specifies a handle and it doesn't exist */
@@ -1155,6 +1169,9 @@ errout:
 	kfree(fnew);
 errout_tb:
 	kfree(tb);
+errout_fold:
+	if (fold)
+		__fl_put(fold);
 	return err;
 }
 
@@ -1169,24 +1186,26 @@ static int fl_delete(struct tcf_proto *tp, void *arg, bool *last,
 				       f->mask->filter_ht_params);
 	__fl_delete(tp, f);
 	*last = list_empty(&head->masks);
+	__fl_put(f);
+
 	return 0;
 }
 
 static void fl_walk(struct tcf_proto *tp, struct tcf_walker *arg,
 		    bool rtnl_held)
 {
-	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct cls_fl_filter *f;
 
 	arg->count = arg->skip;
 
-	while ((f = idr_get_next_ext(&head->handle_idr,
-				    &arg->cookie)) != NULL) {
+	while ((f = fl_get_next_filter(tp, &arg->cookie)) != NULL) {
 		if (arg->fn(tp, f, arg) < 0) {
+			__fl_put(f);
 			arg->stop = 1;
 			break;
 		}
-		arg->cookie = f->handle + 1;
+		__fl_put(f);
+		arg->cookie++;
 		arg->count++;
 	}
 }
@@ -1707,6 +1726,7 @@ static struct tcf_proto_ops cls_fl_ops __read_mostly = {
 	.init		= fl_init,
 	.destroy	= fl_destroy,
 	.get		= fl_get,
+	.put		= fl_put,
 	.change		= fl_change,
 	.delete		= fl_delete,
 	.walk		= fl_walk,
