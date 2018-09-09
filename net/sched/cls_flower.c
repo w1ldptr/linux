@@ -337,9 +337,19 @@ static void fl_hw_update_stats(struct tcf_proto *tp, struct cls_fl_filter *f)
 			 &cls_flower, false);
 }
 
+static struct cls_fl_head *fl_head_dereference(struct tcf_proto *tp)
+{
+	/* Flower classifier only changes root pointer during init and destroy.
+	 * Cls API implements reference counting for tcf_proto, so there is no
+	 * danger of concurrent access to tp when it is being destroyed, even
+	 * without protection provided by rtnl lock.
+	 */
+	return rcu_dereference_protected(tp->root, 1);
+}
+
 static bool __fl_delete(struct tcf_proto *tp, struct cls_fl_filter *f)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	bool async = tcf_exts_get_net(&f->exts);
 	bool last;
 
@@ -370,7 +380,7 @@ static void fl_destroy_sleepable(struct work_struct *work)
 
 static void fl_destroy(struct tcf_proto *tp, bool rtnl_held)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct fl_flow_mask *mask, *next_mask;
 	struct cls_fl_filter *f, *next;
 
@@ -388,7 +398,7 @@ static void fl_destroy(struct tcf_proto *tp, bool rtnl_held)
 
 static void *fl_get(struct tcf_proto *tp, u32 handle)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 
 	return idr_find_ext(&head->handle_idr, handle);
 }
@@ -964,7 +974,7 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 		     u32 handle, struct nlattr **tca,
 		     void **arg, bool ovr, bool rtnl_held)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct cls_fl_filter *fold = *arg;
 	struct cls_fl_filter *fnew;
 	struct nlattr **tb;
@@ -1095,7 +1105,7 @@ errout_tb:
 static int fl_delete(struct tcf_proto *tp, void *arg, bool *last,
 		     bool rtnl_held)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct cls_fl_filter *f = arg;
 
 	if (!tc_skip_sw(f->flags))
@@ -1109,7 +1119,7 @@ static int fl_delete(struct tcf_proto *tp, void *arg, bool *last,
 static void fl_walk(struct tcf_proto *tp, struct tcf_walker *arg,
 		    bool rtnl_held)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct cls_fl_filter *f;
 
 	arg->count = arg->skip;
@@ -1128,7 +1138,7 @@ static void fl_walk(struct tcf_proto *tp, struct tcf_walker *arg,
 static int fl_reoffload(struct tcf_proto *tp, bool add, tc_setup_cb_t *cb,
 			void *cb_priv)
 {
-	struct cls_fl_head *head = rtnl_dereference(tp->root);
+	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct tc_cls_flower_offload cls_flower = {};
 	struct tcf_block *block = tp->chain->block;
 	struct fl_flow_mask *mask;
