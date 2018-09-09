@@ -354,6 +354,8 @@ static void __fl_put(struct cls_fl_filter *f)
 	if (!refcount_dec_and_test(&f->refcnt))
 		return;
 
+	WARN_ON(!tc_deleted(f->flags));
+
 	if (tcf_exts_get_net(&f->exts))
 		tcf_queue_work(&f->rwork, fl_destroy_filter_work);
 	else
@@ -390,21 +392,32 @@ static struct cls_fl_filter *fl_get_next_filter(struct tcf_proto *tp,
 	return f;
 }
 
-static bool __fl_delete(struct tcf_proto *tp, struct cls_fl_filter *f)
+static int __fl_delete(struct tcf_proto *tp, struct cls_fl_filter *f,
+		       bool *last)
 {
 	struct cls_fl_head *head = fl_head_dereference(tp);
 	bool async = tcf_exts_get_net(&f->exts);
-	bool last;
+	int err = 0;
 
-	idr_remove_ext(&head->handle_idr, f->handle);
-	list_del_rcu(&f->list);
-	last = fl_mask_put(head, f->mask, async);
-	if (!tc_skip_hw(f->flags))
-		fl_hw_destroy_filter(tp, f);
-	tcf_unbind_filter(tp, &f->res);
-	__fl_put(f);
+	(*last) = false;
 
-	return last;
+	if (!tc_deleted(f->flags)) {
+		f->flags |= TCA_CLS_FLAGS_DELETED;
+		if (!tc_skip_sw(f->flags))
+			rhashtable_remove_fast(&f->mask->ht, &f->ht_node,
+					       f->mask->filter_ht_params);
+		idr_remove_ext(&head->handle_idr, f->handle);
+		list_del_rcu(&f->list);
+		(*last) = fl_mask_put(head, f->mask, async);
+		if (!tc_skip_hw(f->flags))
+			fl_hw_destroy_filter(tp, f);
+		tcf_unbind_filter(tp, &f->res);
+		__fl_put(f);
+	} else {
+		err = -ENOENT;
+	}
+
+	return err;
 }
 
 static void fl_destroy_sleepable(struct work_struct *work)
@@ -423,10 +436,12 @@ static void fl_destroy(struct tcf_proto *tp, bool rtnl_held)
 	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct fl_flow_mask *mask, *next_mask;
 	struct cls_fl_filter *f, *next;
+	bool last;
 
 	list_for_each_entry_safe(mask, next_mask, &head->masks, list) {
 		list_for_each_entry_safe(f, next, &mask->filters, list) {
-			if (__fl_delete(tp, f))
+			__fl_delete(tp, f, &last);
+			if (last)
 				break;
 		}
 	}
@@ -1095,6 +1110,12 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 
 	refcount_inc(&fnew->refcnt);
 	if (fold) {
+		/* Fold filter was deleted concurrently. Retry lookup. */
+		if (tc_deleted(fold->flags)) {
+			err = -EAGAIN;
+			goto errout_hw;
+		}
+
 		fnew->handle = handle;
 
 		if (!tc_skip_sw(fnew->flags)) {
@@ -1114,6 +1135,7 @@ static int fl_change(struct net *net, struct sk_buff *in_skb,
 					       fold->mask->filter_ht_params);
 		idr_replace_ext(&head->handle_idr, fnew, fnew->handle);
 		list_replace_rcu(&fold->list, &fnew->list);
+		fold->flags |= TCA_CLS_FLAGS_DELETED;
 
 		if (!tc_skip_hw(fold->flags))
 			fl_hw_destroy_filter(tp, fold);
@@ -1180,15 +1202,14 @@ static int fl_delete(struct tcf_proto *tp, void *arg, bool *last,
 {
 	struct cls_fl_head *head = fl_head_dereference(tp);
 	struct cls_fl_filter *f = arg;
+	bool last_on_mask;
+	int err = 0;
 
-	if (!tc_skip_sw(f->flags))
-		rhashtable_remove_fast(&f->mask->ht, &f->ht_node,
-				       f->mask->filter_ht_params);
-	__fl_delete(tp, f);
+	err = __fl_delete(tp, f, &last_on_mask);
 	*last = list_empty(&head->masks);
 	__fl_put(f);
 
-	return 0;
+	return err;
 }
 
 static void fl_walk(struct tcf_proto *tp, struct tcf_walker *arg,

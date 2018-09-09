@@ -693,6 +693,11 @@ static inline bool tc_in_hw(u32 flags)
 	return (flags & TCA_CLS_FLAGS_IN_HW) ? true : false;
 }
 
+static inline bool tc_deleted(u32 flags)
+{
+	return (flags & TCA_CLS_FLAGS_DELETED) ? true : false;
+}
+
 static inline void
 tc_cls_common_offload_init(struct tc_cls_common_offload *cls_common,
 			   const struct tcf_proto *tp, u32 flags)
