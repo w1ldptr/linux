@@ -2614,7 +2614,7 @@ static int mlx5e_ndo_setup_tc(struct net_device *dev, u32 handle,
 	}
 
 mqprio:
-	if (tc->type != TC_SETUP_MQPRIO)
+	if (tc->type != TC_SETUP_QDISC_MQPRIO)
 		return -EINVAL;
 
 	return 0;

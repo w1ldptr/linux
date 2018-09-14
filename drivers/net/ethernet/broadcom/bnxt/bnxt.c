@@ -6718,7 +6718,7 @@ int bnxt_setup_mq_tc(struct net_device *dev, u8 tc)
 static int bnxt_setup_tc(struct net_device *dev, u32 handle, __be16 proto,
 			 struct tc_to_netdev *ntc)
 {
-	if (ntc->type != TC_SETUP_MQPRIO)
+	if (ntc->type != TC_SETUP_QDISC_MQPRIO)
 		return -EINVAL;
 
 	return bnxt_setup_mq_tc(dev, ntc->tc);

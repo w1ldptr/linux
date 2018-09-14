@@ -5618,7 +5618,7 @@ static int __i40e_setup_tc(struct net_device *netdev, u32 handle, __be16 proto,
 			   struct tc_to_netdev *tc)
 #endif
 {
-	if (handle != TC_H_ROOT || tc->type != TC_SETUP_MQPRIO)
+	if (handle != TC_H_ROOT || tc->type != TC_SETUP_QDISC_MQPRIO)
 		return -EINVAL;
 	return i40e_setup_tc(netdev, tc->tc);
 }
