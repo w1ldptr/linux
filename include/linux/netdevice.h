@@ -1724,7 +1724,8 @@ struct net_device {
 	unsigned char		broadcast[MAX_ADDR_LEN];	/* hw bcast add	*/
 
 #ifdef CONFIG_NET_CLS_ACT
-	RH_KABI_FILL_HOLE(struct tcf_proto __rcu *ingress_cl_list)
+	struct mini_Qdisc __rcu	*miniq_ingress;
+	struct mini_Qdisc __rcu	*miniq_egress;
 #endif
 	/* Hole: 16 bytes remain */
 
