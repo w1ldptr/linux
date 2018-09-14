@@ -1938,6 +1938,7 @@ struct net_device_extended {
 	void (*priv_destructor)(struct net_device *dev);
 #ifdef CONFIG_NET_CLS_ACT
 	struct tcf_proto __rcu	*egress_cl_list;
+	struct tcf_proto __rcu	*ingress_cl_list;
 #endif
 #ifdef CONFIG_NET_SCHED
 	DECLARE_HASHTABLE	(qdisc_hash, 4);
