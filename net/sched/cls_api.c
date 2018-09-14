@@ -254,8 +254,36 @@ tcf_chain_filter_chain_ptr_set(struct tcf_chain *chain,
 	chain->p_filter_chain = p_filter_chain;
 }
 
-int tcf_block_get(struct tcf_block **p_block,
-		  struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q)
+static void tcf_block_offload_cmd(struct tcf_block *block, struct Qdisc *q,
+				  struct tcf_block_ext_info *ei,
+				  enum tc_block_command command)
+{
+	struct net_device *dev = q->dev_queue->dev;
+	struct tc_block_offload bo = {};
+
+	if (!tc_can_offload(dev))
+		return;
+	bo.command = command;
+	bo.binder_type = ei->binder_type;
+	bo.block = block;
+	__rh_call_ndo_setup_tc(dev, TC_SETUP_BLOCK, &bo);
+}
+
+static void tcf_block_offload_bind(struct tcf_block *block, struct Qdisc *q,
+				   struct tcf_block_ext_info *ei)
+{
+	tcf_block_offload_cmd(block, q, ei, TC_BLOCK_BIND);
+}
+
+static void tcf_block_offload_unbind(struct tcf_block *block, struct Qdisc *q,
+				     struct tcf_block_ext_info *ei)
+{
+	tcf_block_offload_cmd(block, q, ei, TC_BLOCK_UNBIND);
+}
+
+int tcf_block_get_ext(struct tcf_block **p_block,
+		      struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q,
+		      struct tcf_block_ext_info *ei)
 {
 	struct tcf_block *block = kzalloc(sizeof(*block), GFP_KERNEL);
 	struct tcf_chain *chain;
@@ -273,6 +301,7 @@ int tcf_block_get(struct tcf_block **p_block,
 	tcf_chain_filter_chain_ptr_set(chain, p_filter_chain);
 	block->net = qdisc_net(q);
 	block->q = q;
+	tcf_block_offload_bind(block, q, ei);
 	*p_block = block;
 	return 0;
 
@@ -280,17 +309,31 @@ err_chain_create:
 	kfree(block);
 	return err;
 }
+EXPORT_SYMBOL(tcf_block_get_ext);
+
+int tcf_block_get(struct tcf_block **p_block,
+		  struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q)
+{
+	struct tcf_block_ext_info ei = {0, };
+
+	return tcf_block_get_ext(p_block, p_filter_chain, q, &ei);
+}
+
 EXPORT_SYMBOL(tcf_block_get);
 
 /* XXX: Standalone actions are not allowed to jump to any chain, and bound
  * actions should be all removed after flushing.
  */
-void tcf_block_put(struct tcf_block *block)
+void tcf_block_put_ext(struct tcf_block *block,
+		       struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q,
+		       struct tcf_block_ext_info *ei)
 {
 	struct tcf_chain *chain, *tmp;
 
 	if (!block)
 		return;
+
+	tcf_block_offload_unbind(block, q, ei);
 
 	/* Hold a refcnt for all chains, so that they don't disappear
 	 * while we are iterating.
@@ -308,6 +351,14 @@ void tcf_block_put(struct tcf_block *block)
 	/* Finally, put chain 0 and allow block to be freed. */
 	chain = list_first_entry(&block->chain_list, struct tcf_chain, list);
 	tcf_chain_put(chain);
+}
+EXPORT_SYMBOL(tcf_block_put_ext);
+
+void tcf_block_put(struct tcf_block *block)
+{
+	struct tcf_block_ext_info ei = {0, };
+
+	tcf_block_put_ext(block, NULL, block->q, &ei);
 }
 EXPORT_SYMBOL(tcf_block_put);
 
