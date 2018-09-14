@@ -323,36 +323,64 @@ int tcf_block_get(struct tcf_block **p_block,
 
 EXPORT_SYMBOL(tcf_block_get);
 
+static void tcf_block_put_final(struct work_struct *work)
+{
+	struct tcf_block *block = container_of(work, struct tcf_block, work);
+	struct tcf_chain *chain, *tmp;
+
+	/* At this point, all the chains should have refcnt == 1. */
+	rtnl_lock();
+	list_for_each_entry_safe(chain, tmp, &block->chain_list, list)
+		tcf_chain_put(chain);
+	rtnl_unlock();
+	kfree(block);
+}
+
 /* XXX: Standalone actions are not allowed to jump to any chain, and bound
- * actions should be all removed after flushing.
+ * actions should be all removed after flushing. However, filters are destroyed
+ * in RCU callbacks, we have to hold the chains first, otherwise we would
+ * always race with RCU callbacks on this list without proper locking.
  */
+static void tcf_block_put_deferred(struct work_struct *work)
+{
+	struct tcf_block *block = container_of(work, struct tcf_block, work);
+	struct tcf_chain *chain;
+
+	rtnl_lock();
+	/* Hold a refcnt for all chains, except 0, in case they are gone. */
+	list_for_each_entry(chain, &block->chain_list, list)
+		if (chain->index)
+			tcf_chain_hold(chain);
+
+	/* No race on the list, because no chain could be destroyed. */
+	list_for_each_entry(chain, &block->chain_list, list)
+		tcf_chain_flush(chain);
+
+	INIT_WORK(&block->work, tcf_block_put_final);
+	/* Wait for RCU callbacks to release the reference count and make
+	 * sure their works have been queued before this.
+	 */
+	rcu_barrier();
+	tcf_queue_work(&block->work);
+	rtnl_unlock();
+}
+
 void tcf_block_put_ext(struct tcf_block *block,
 		       struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q,
 		       struct tcf_block_ext_info *ei)
 {
-	struct tcf_chain *chain, *tmp;
-
 	if (!block)
 		return;
 
 	tcf_block_offload_unbind(block, q, ei);
 
-	/* Hold a refcnt for all chains, so that they don't disappear
-	 * while we are iterating.
+	INIT_WORK(&block->work, tcf_block_put_deferred);
+	/* Wait for existing RCU callbacks to cool down, make sure their works
+	 * have been queued before this. We can not flush pending works here
+	 * because we are holding the RTNL lock.
 	 */
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_hold(chain);
-
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_flush(chain);
-
-	/* At this point, all the chains should have refcnt >= 1. */
-	list_for_each_entry_safe(chain, tmp, &block->chain_list, list)
-		tcf_chain_put(chain);
-
-	/* Finally, put chain 0 and allow block to be freed. */
-	chain = list_first_entry(&block->chain_list, struct tcf_chain, list);
-	tcf_chain_put(chain);
+	rcu_barrier();
+	tcf_queue_work(&block->work);
 }
 EXPORT_SYMBOL(tcf_block_put_ext);
 

@@ -25,6 +25,7 @@ enum tcf_block_binder_type {
 };
 
 struct tcf_block_cb;
+bool tcf_queue_work(struct work_struct *work);
 
 struct tcf_block_ext_info {
 	enum tcf_block_binder_type binder_type;
