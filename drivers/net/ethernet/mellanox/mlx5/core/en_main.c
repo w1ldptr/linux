@@ -2583,27 +2583,10 @@ int mlx5e_modify_rqs_vsd(struct mlx5e_priv *priv, bool vsd)
 	return 0;
 }
 
-static int mlx5e_setup_tc(struct net_device *netdev, u8 tc)
+int mlx5e_setup_tc(struct net_device *dev, enum tc_setup_type type,
+		   void *type_data)
 {
-	struct mlx5e_priv *priv = netdev_priv(netdev);
-	bool was_opened;
 	int err = 0;
-
-	if (tc && tc != MLX5E_MAX_NUM_TC)
-		return -EINVAL;
-
-	mutex_lock(&priv->state_lock);
-
-	was_opened = test_bit(MLX5E_STATE_OPENED, &priv->state);
-	if (was_opened)
-		mlx5e_close_locked(priv->netdev);
-
-	priv->params.num_tc = tc ? tc : 1;
-
-	if (was_opened)
-		err = mlx5e_open_locked(priv->netdev);
-
-	mutex_unlock(&priv->state_lock);
 
 	return err;
 }
@@ -2634,7 +2617,7 @@ mqprio:
 	if (tc->type != TC_SETUP_MQPRIO)
 		return -EINVAL;
 
-	return mlx5e_setup_tc(dev, tc->tc);
+	return 0;
 }
 
 static struct rtnl_link_stats64 *

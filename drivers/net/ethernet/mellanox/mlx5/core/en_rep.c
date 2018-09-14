@@ -312,6 +312,14 @@ static int mlx5e_rep_ndo_setup_tc(struct net_device *dev, u32 handle,
 	}
 }
 
+static int mlx5e_rep_setup_tc_cb(enum tc_setup_type type, void *type_data,
+				 void *cb_priv)
+{
+	struct net_device *dev = cb_priv;
+
+	return mlx5e_setup_tc(dev, type, type_data);
+}
+
 bool mlx5e_is_uplink_rep(struct mlx5e_priv *priv)
 {
 	struct mlx5_eswitch_rep *rep = (struct mlx5_eswitch_rep *)priv->ppriv;
@@ -568,6 +576,11 @@ int mlx5e_vport_rep_load(struct mlx5_eswitch *esw,
 
 	rep->netdev = netdev;
 
+	err = tc_setup_cb_egdev_register(netdev, mlx5e_rep_setup_tc_cb,
+					 mlx5_eswitch_get_uplink_netdev(esw));
+	if (err)
+		goto err_egdev_cleanup;
+
 	err = mlx5e_attach_netdev(esw->dev, netdev);
 	if (err) {
 		pr_warn("Failed to attach representor netdev for vport %d\n",
@@ -583,6 +596,10 @@ int mlx5e_vport_rep_load(struct mlx5_eswitch *esw,
 	}
 
 	return 0;
+
+err_egdev_cleanup:
+	tc_setup_cb_egdev_unregister(netdev, mlx5e_rep_setup_tc_cb,
+				     mlx5_eswitch_get_uplink_netdev(esw));
 
 err_detach_netdev:
 	mlx5e_detach_netdev(esw->dev, netdev);
@@ -600,6 +617,8 @@ void mlx5e_vport_rep_unload(struct mlx5_eswitch *esw,
 	struct net_device *netdev = rep->netdev;
 
 	unregister_netdev(netdev);
+	tc_setup_cb_egdev_unregister(netdev, mlx5e_rep_setup_tc_cb,
+				     mlx5_eswitch_get_uplink_netdev(esw));
 	mlx5e_detach_netdev(esw->dev, netdev);
 	mlx5e_destroy_netdev(esw->dev, netdev_priv(netdev));
 }
