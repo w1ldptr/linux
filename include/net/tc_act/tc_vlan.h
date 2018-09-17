@@ -16,12 +16,17 @@
 #define VLAN_F_POP		0x1
 #define VLAN_F_PUSH		0x2
 
+struct tcf_vlan_params {
+	int               tcfv_action;
+	u16               tcfv_push_vid;
+	__be16            tcfv_push_proto;
+	u8                tcfv_push_prio;
+	struct rcu_head   rcu;
+};
+
 struct tcf_vlan {
 	struct tc_action	common;
-	int			tcfv_action;
-	u16			tcfv_push_vid;
-	__be16			tcfv_push_proto;
-	u8			tcfv_push_prio;
+	struct tcf_vlan_params __rcu *vlan_p;
 };
 #define to_vlan(a) ((struct tcf_vlan *)a)
 
@@ -36,22 +41,45 @@ static inline bool is_tcf_vlan(const struct tc_action *a)
 
 static inline u32 tcf_vlan_action(const struct tc_action *a)
 {
-	return to_vlan(a)->tcfv_action;
+	u32 tcfv_action;
+
+	rcu_read_lock();
+	tcfv_action = rcu_dereference(to_vlan(a)->vlan_p)->tcfv_action;
+	rcu_read_unlock();
+
+	return tcfv_action;
 }
 
 static inline u16 tcf_vlan_push_vid(const struct tc_action *a)
 {
-	return to_vlan(a)->tcfv_push_vid;
+	u16 tcfv_push_vid;
+
+	rcu_read_lock();
+	tcfv_push_vid = rcu_dereference(to_vlan(a)->vlan_p)->tcfv_push_vid;
+	rcu_read_unlock();
+
+	return tcfv_push_vid;
 }
 
 static inline __be16 tcf_vlan_push_proto(const struct tc_action *a)
 {
-	return to_vlan(a)->tcfv_push_proto;
+	__be16 tcfv_push_proto;
+
+	rcu_read_lock();
+	tcfv_push_proto = rcu_dereference(to_vlan(a)->vlan_p)->tcfv_push_proto;
+	rcu_read_unlock();
+
+	return tcfv_push_proto;
 }
 
 static inline u8 tcf_vlan_push_prio(const struct tc_action *a)
 {
-	return to_vlan(a)->tcfv_push_prio;
-}
+	u8 tcfv_push_prio;
 
+	rcu_read_lock();
+	tcfv_push_prio = rcu_dereference(to_vlan(a)->vlan_p)->tcfv_push_prio;
+	rcu_read_unlock();
+
+	return tcfv_push_prio;
+}
 #endif /* __NET_TC_VLAN_H */
