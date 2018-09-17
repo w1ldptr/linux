@@ -600,8 +600,8 @@ struct tc_cls_common_offload {
 };
 
 static inline void
-tc_cls_common_offload_init(struct tc_cls_common_offload *cls_common,
-			   const struct tcf_proto *tp)
+tc_cls_common_offload_init_deprecated(struct tc_cls_common_offload *cls_common,
+				      const struct tcf_proto *tp)
 {
 	cls_common->chain_index = tp->chain->index;
 	cls_common->protocol = tp->protocol;
@@ -684,6 +684,15 @@ static inline bool tc_flags_valid(u32 flags)
 static inline bool tc_in_hw(u32 flags)
 {
 	return (flags & TCA_CLS_FLAGS_IN_HW) ? true : false;
+}
+
+static inline void
+tc_cls_common_offload_init(struct tc_cls_common_offload *cls_common,
+			   const struct tcf_proto *tp, u32 flags)
+{
+	cls_common->chain_index = tp->chain->index;
+	cls_common->protocol = tp->protocol;
+	cls_common->prio = tp->prio;
 }
 
 enum tc_fl_command {
