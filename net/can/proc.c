@@ -280,7 +280,6 @@ static int can_stats_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations can_stats_proc_fops = {
-	.owner		= THIS_MODULE,
 	.open		= can_stats_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -311,7 +310,6 @@ static int can_reset_stats_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations can_reset_stats_proc_fops = {
-	.owner		= THIS_MODULE,
 	.open		= can_reset_stats_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -330,7 +328,6 @@ static int can_version_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations can_version_proc_fops = {
-	.owner		= THIS_MODULE,
 	.open		= can_version_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -382,7 +379,6 @@ static int can_rcvlist_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations can_rcvlist_proc_fops = {
-	.owner		= THIS_MODULE,
 	.open		= can_rcvlist_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
@@ -445,7 +441,6 @@ static int can_rcvlist_sff_proc_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations can_rcvlist_sff_proc_fops = {
-	.owner		= THIS_MODULE,
 	.open		= can_rcvlist_sff_proc_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,

@@ -632,7 +632,6 @@ static int pn_sock_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations pn_sock_seq_fops = {
-	.owner = THIS_MODULE,
 	.open = pn_sock_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
@@ -816,7 +815,6 @@ static int pn_res_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations pn_res_seq_fops = {
-	.owner = THIS_MODULE,
 	.open = pn_res_open,
 	.read = seq_read,
 	.llseek = seq_lseek,

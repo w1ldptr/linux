@@ -1155,7 +1155,6 @@ static int rose_nodes_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations rose_nodes_fops = {
-	.owner = THIS_MODULE,
 	.open = rose_nodes_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
@@ -1239,7 +1238,6 @@ static int rose_neigh_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations rose_neigh_fops = {
-	.owner = THIS_MODULE,
 	.open = rose_neigh_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
@@ -1325,7 +1323,6 @@ static int rose_route_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations rose_routes_fops = {
-	.owner = THIS_MODULE,
 	.open = rose_route_open,
 	.read = seq_read,
 	.llseek = seq_lseek,

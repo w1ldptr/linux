@@ -1046,7 +1046,6 @@ static int aarp_seq_open(struct inode *inode, struct file *file)
 }
 
 const struct file_operations atalk_seq_arp_fops = {
-	.owner		= THIS_MODULE,
 	.open           = aarp_seq_open,
 	.read           = seq_read,
 	.llseek         = seq_lseek,
