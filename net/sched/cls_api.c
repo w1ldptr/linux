@@ -19,11 +19,9 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/errno.h>
-#include <linux/err.h>
 #include <linux/skbuff.h>
 #include <linux/init.h>
 #include <linux/kmod.h>
-#include <linux/err.h>
 #include <linux/slab.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
