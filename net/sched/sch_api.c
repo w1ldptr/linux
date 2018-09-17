@@ -793,6 +793,7 @@ static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
 	unsigned char *b = skb_tail_pointer(skb);
 	struct gnet_dump d;
 	struct qdisc_size_table *stab;
+	u32 block_index;
 	__u32 qlen;
 
 	cond_resched();
@@ -809,6 +810,18 @@ static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
 	tcm->tcm_info = atomic_read(&q->refcnt);
 	if (nla_put_string(skb, TCA_KIND, q->ops->id))
 		goto nla_put_failure;
+	if (q->ops->ingress_block_get) {
+		block_index = q->ops->ingress_block_get(q);
+		if (block_index &&
+		    nla_put_u32(skb, TCA_INGRESS_BLOCK, block_index))
+			goto nla_put_failure;
+	}
+	if (q->ops->egress_block_get) {
+		block_index = q->ops->egress_block_get(q);
+		if (block_index &&
+		    nla_put_u32(skb, TCA_EGRESS_BLOCK, block_index))
+			goto nla_put_failure;
+	}
 	if (q->ops->dump && q->ops->dump(q, skb) < 0)
 		goto nla_put_failure;
 
@@ -991,6 +1004,35 @@ skip:
 	return err;
 }
 
+static int qdisc_block_indexes_set(struct Qdisc *sch, struct nlattr **tca)
+{
+	u32 block_index;
+
+	if (tca[TCA_INGRESS_BLOCK]) {
+		block_index = nla_get_u32(tca[TCA_INGRESS_BLOCK]);
+
+		if (!block_index) {
+			return -EINVAL;
+		}
+		if (!sch->ops->ingress_block_set) {
+			return -EOPNOTSUPP;
+		}
+		sch->ops->ingress_block_set(sch, block_index);
+	}
+	if (tca[TCA_EGRESS_BLOCK]) {
+		block_index = nla_get_u32(tca[TCA_EGRESS_BLOCK]);
+
+		if (!block_index) {
+			return -EINVAL;
+		}
+		if (!sch->ops->egress_block_set) {
+			return -EOPNOTSUPP;
+		}
+		sch->ops->egress_block_set(sch, block_index);
+	}
+	return 0;
+}
+
 /* lockdep annotation is needed for ingress; egress gets it only for name */
 static struct lock_class_key qdisc_tx_lock;
 static struct lock_class_key qdisc_rx_lock;
@@ -1082,6 +1124,10 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 		netdev_info(dev, "Caught tx_queue_len zero misconfig\n");
 	}
 
+	err = qdisc_block_indexes_set(sch, tca);
+	if (err)
+		goto err_out3;
+
 	if (!ops->init || (err = ops->init(sch, tca[TCA_OPTIONS])) == 0) {
 		if (tca[TCA_STAB]) {
 			stab = qdisc_get_stab(tca[TCA_STAB]);
@@ -1150,6 +1196,9 @@ static int qdisc_change(struct Qdisc *sch, struct nlattr **tca)
 	if (tca[TCA_OPTIONS]) {
 		if (sch->ops->change == NULL)
 			return -EINVAL;
+		if (tca[TCA_INGRESS_BLOCK] || tca[TCA_EGRESS_BLOCK]) {
+			return -EOPNOTSUPP;
+		}
 		err = sch->ops->change(sch, tca[TCA_OPTIONS]);
 		if (err)
 			return err;
@@ -1831,6 +1880,10 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n)
 			err = -EINVAL;
 			goto out;
 		}
+	}
+
+	if (tca[TCA_INGRESS_BLOCK] || tca[TCA_EGRESS_BLOCK]) {
+		return -EOPNOTSUPP;
 	}
 
 	new_cl = cl;
