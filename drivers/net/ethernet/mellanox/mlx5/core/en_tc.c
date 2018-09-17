@@ -938,11 +938,10 @@ static int parse_tc_fdb_actions(struct mlx5e_priv *priv, struct tcf_exts *exts,
 		}
 
 		if (is_tcf_mirred_egress_redirect(a)) {
-			int ifindex = tcf_mirred_ifindex(a);
 			struct net_device *out_dev;
 			struct mlx5e_priv *out_priv;
 
-			out_dev = __dev_get_by_index(dev_net(priv->netdev), ifindex);
+			out_dev = tcf_mirred_dev(a);
 
 			if (switchdev_port_same_parent_id(priv->netdev,
 							  out_dev)) {

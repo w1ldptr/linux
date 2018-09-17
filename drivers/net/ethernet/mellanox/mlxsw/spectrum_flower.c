@@ -62,10 +62,9 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			if (err)
 				return err;
 		} else if (is_tcf_mirred_egress_redirect(a)) {
-			int ifindex = tcf_mirred_ifindex(a);
 			struct net_device *out_dev;
 
-			out_dev = __dev_get_by_index(dev_net(dev), ifindex);
+			out_dev = tcf_mirred_dev(a);
 			if (out_dev == dev)
 				out_dev = NULL;
 
