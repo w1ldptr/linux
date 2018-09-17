@@ -23,6 +23,7 @@
 #include <linux/init.h>
 #include <linux/kmod.h>
 #include <linux/slab.h>
+#include <linux/idr.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/netlink.h>
@@ -178,6 +179,12 @@ static void tcf_proto_destroy(struct tcf_proto *tp)
 	kfree_rcu(tp, rcu);
 }
 
+struct tcf_filter_chain_list_item {
+	struct list_head list;
+	tcf_chain_head_change_t *chain_head_change;
+	void *chain_head_change_priv;
+};
+
 static struct tcf_chain *tcf_chain_create(struct tcf_block *block,
 					  u32 chain_index)
 {
@@ -186,6 +193,7 @@ static struct tcf_chain *tcf_chain_create(struct tcf_block *block,
 	chain = kzalloc(sizeof(*chain), GFP_KERNEL);
 	if (!chain)
 		return NULL;
+	INIT_LIST_HEAD(&chain->filter_chain_list);
 	list_add_tail(&chain->list, &block->chain_list);
 	chain->block = block;
 	chain->index = chain_index;
@@ -193,12 +201,19 @@ static struct tcf_chain *tcf_chain_create(struct tcf_block *block,
 	return chain;
 }
 
+static void tcf_chain_head_change_item(struct tcf_filter_chain_list_item *item,
+				       struct tcf_proto *tp_head)
+{
+	if (item->chain_head_change)
+		item->chain_head_change(tp_head, item->chain_head_change_priv);
+}
 static void tcf_chain_head_change(struct tcf_chain *chain,
 				  struct tcf_proto *tp_head)
 {
-	if (chain->chain_head_change)
-		chain->chain_head_change(tp_head,
-					 chain->chain_head_change_priv);
+	struct tcf_filter_chain_list_item *item;
+
+	list_for_each_entry(item, &chain->filter_chain_list, list)
+		tcf_chain_head_change_item(item, tp_head);
 }
 
 static void tcf_chain_flush(struct tcf_chain *chain)
@@ -279,15 +294,80 @@ static void tcf_block_offload_unbind(struct tcf_block *block, struct Qdisc *q,
 	tcf_block_offload_cmd(block, q, ei, TC_BLOCK_UNBIND);
 }
 
-int tcf_block_get_ext(struct tcf_block **p_block, struct Qdisc *q,
-		      struct tcf_block_ext_info *ei)
+static int
+tcf_chain_head_change_cb_add(struct tcf_chain *chain,
+			     struct tcf_block_ext_info *ei)
 {
-	struct tcf_block *block = kzalloc(sizeof(*block), GFP_KERNEL);
+	struct tcf_filter_chain_list_item *item;
+
+	item = kmalloc(sizeof(*item), GFP_KERNEL);
+	if (!item) {
+		return -ENOMEM;
+	}
+	item->chain_head_change = ei->chain_head_change;
+	item->chain_head_change_priv = ei->chain_head_change_priv;
+	if (chain->filter_chain)
+		tcf_chain_head_change_item(item, chain->filter_chain);
+	list_add(&item->list, &chain->filter_chain_list);
+	return 0;
+}
+
+static void
+tcf_chain_head_change_cb_del(struct tcf_chain *chain,
+			     struct tcf_block_ext_info *ei)
+{
+	struct tcf_filter_chain_list_item *item;
+
+	list_for_each_entry(item, &chain->filter_chain_list, list) {
+		if ((!ei->chain_head_change && !ei->chain_head_change_priv) ||
+		    (item->chain_head_change == ei->chain_head_change &&
+		     item->chain_head_change_priv == ei->chain_head_change_priv)) {
+			tcf_chain_head_change_item(item, NULL);
+			list_del(&item->list);
+			kfree(item);
+			return;
+		}
+	}
+	WARN_ON(1);
+}
+
+struct tcf_net {
+	struct idr_ext idr;
+};
+
+static unsigned int tcf_net_id;
+
+static int tcf_block_insert(struct tcf_block *block, struct net *net,
+			    u32 block_index)
+{
+	struct tcf_net *tn = net_generic(net, tcf_net_id);
+	int err;
+
+	err = idr_alloc_ext(&tn->idr, block, NULL, (unsigned long)block_index,
+			    (unsigned long)block_index + 1, GFP_KERNEL);
+	if (err)
+		return err;
+	block->index = block_index;
+	return 0;
+}
+
+static void tcf_block_remove(struct tcf_block *block, struct net *net)
+{
+	struct tcf_net *tn = net_generic(net, tcf_net_id);
+
+	idr_remove_ext(&tn->idr, (unsigned long)block->index);
+}
+
+static struct tcf_block *tcf_block_create(struct net *net, struct Qdisc *q)
+{
+	struct tcf_block *block;
 	struct tcf_chain *chain;
 	int err;
 
-	if (!block)
-		return -ENOMEM;
+	block = kzalloc(sizeof(*block), GFP_KERNEL);
+	if (!block) {
+		return ERR_PTR(-ENOMEM);
+	}
 	INIT_LIST_HEAD(&block->chain_list);
 	INIT_LIST_HEAD(&block->cb_list);
 
@@ -297,17 +377,73 @@ int tcf_block_get_ext(struct tcf_block **p_block, struct Qdisc *q,
 		err = -ENOMEM;
 		goto err_chain_create;
 	}
-	WARN_ON(!ei->chain_head_change);
-	chain->chain_head_change = ei->chain_head_change;
-	chain->chain_head_change_priv = ei->chain_head_change_priv;
 	block->net = qdisc_net(q);
+	block->refcnt = 1;
+	block->net = net;
 	block->q = q;
+	return block;
+
+err_chain_create:
+	kfree(block);
+	return ERR_PTR(err);
+}
+
+static struct tcf_block *tcf_block_lookup(struct net *net, u32 block_index)
+{
+	struct tcf_net *tn = net_generic(net, tcf_net_id);
+
+	return idr_find_ext(&tn->idr, (unsigned long)block_index);
+}
+
+static struct tcf_chain *tcf_block_chain_zero(struct tcf_block *block)
+{
+	return list_first_entry(&block->chain_list, struct tcf_chain, list);
+}
+
+int tcf_block_get_ext(struct tcf_block **p_block, struct Qdisc *q,
+		      struct tcf_block_ext_info *ei)
+{
+	struct net *net = qdisc_net(q);
+	struct tcf_block *block = NULL;
+	bool created = false;
+	int err;
+
+	if (ei->block_index) {
+		/* block_index not 0 means the shared block is requested */
+		block = tcf_block_lookup(net, ei->block_index);
+		if (block)
+			block->refcnt++;
+	}
+
+	if (!block) {
+		block = tcf_block_create(net, q);
+		if (IS_ERR(block))
+			return PTR_ERR(block);
+		created = true;
+		if (ei->block_index) {
+			err = tcf_block_insert(block, net, ei->block_index);
+			if (err)
+				goto err_block_insert;
+		}
+	}
+
+	err = tcf_chain_head_change_cb_add(tcf_block_chain_zero(block), ei);
+	if (err)
+		goto err_chain_head_change_cb_add;
 	tcf_block_offload_bind(block, q, ei);
 	*p_block = block;
 	return 0;
 
-err_chain_create:
-	kfree(block);
+err_chain_head_change_cb_add:
+	if (created) {
+		if (tcf_block_shared(block))
+			tcf_block_remove(block, net);
+err_block_insert:
+		kfree(tcf_block_chain_zero(block));
+		kfree(block);
+	} else {
+		block->refcnt--;
+	}
 	return err;
 }
 EXPORT_SYMBOL(tcf_block_get_ext);
@@ -343,24 +479,32 @@ void tcf_block_put_ext(struct tcf_block *block, struct Qdisc *q,
 
 	if (!block)
 		return;
-	/* Hold a refcnt for all chains, so that they don't disappear
-	 * while we are iterating.
-	 */
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_hold(chain);
+	tcf_chain_head_change_cb_del(tcf_block_chain_zero(block), ei);
 
-	list_for_each_entry(chain, &block->chain_list, list)
-		tcf_chain_flush(chain);
+	if (--block->refcnt == 0) {
+		if (tcf_block_shared(block))
+			tcf_block_remove(block, block->net);
+
+		/* Hold a refcnt for all chains, so that they don't disappear
+		 * while we are iterating.
+		 */
+		list_for_each_entry(chain, &block->chain_list, list)
+			tcf_chain_hold(chain);
+
+		list_for_each_entry(chain, &block->chain_list, list)
+			tcf_chain_flush(chain);
+	}
 
 	tcf_block_offload_unbind(block, q, ei);
 
-	/* At this point, all the chains should have refcnt >= 1. */
-	list_for_each_entry_safe(chain, tmp, &block->chain_list, list)
-		tcf_chain_put(chain);
+	if (block->refcnt == 0) {
+		/* At this point, all the chains should have refcnt >= 1. */
+		list_for_each_entry_safe(chain, tmp, &block->chain_list, list)
+			tcf_chain_put(chain);
 
-	/* Finally, put chain 0 and allow block to be freed. */
-	chain = list_first_entry(&block->chain_list, struct tcf_chain, list);
-	tcf_chain_put(chain);
+		/* Finally, put chain 0 and allow block to be freed. */
+		tcf_chain_put(tcf_block_chain_zero(block));
+	}
 }
 EXPORT_SYMBOL(tcf_block_put_ext);
 
@@ -1245,18 +1389,50 @@ int tc_setup_cb_call(struct tcf_block *block, struct tcf_exts *exts,
 }
 EXPORT_SYMBOL(tc_setup_cb_call);
 
+static __net_init int tcf_net_init(struct net *net)
+{
+	struct tcf_net *tn = net_generic(net, tcf_net_id);
+
+	idr_init_ext(&tn->idr);
+	return 0;
+}
+
+static void __net_exit tcf_net_exit(struct net *net)
+{
+	struct tcf_net *tn = net_generic(net, tcf_net_id);
+
+	idr_destroy_ext(&tn->idr);
+}
+
+static struct pernet_operations tcf_net_ops = {
+	.init = tcf_net_init,
+	.exit = tcf_net_exit,
+	.id   = &tcf_net_id,
+	.size = sizeof(struct tcf_net),
+};
+
 static int __init tc_filter_init(void)
 {
+	int err;
+
 	tc_filter_wq = alloc_ordered_workqueue("tc_filter_workqueue", 0);
 	if (!tc_filter_wq)
 		return -ENOMEM;
 
-	rtnl_register(PF_UNSPEC, RTM_NEWTFILTER, tc_ctl_tfilter, NULL, NULL);
-	rtnl_register(PF_UNSPEC, RTM_DELTFILTER, tc_ctl_tfilter, NULL, NULL);
+	err = register_pernet_subsys(&tcf_net_ops);
+	if (err)
+		goto err_register_pernet_subsys;
+
+	rtnl_register(PF_UNSPEC, RTM_NEWTFILTER, tc_ctl_tfilter, NULL, 0);
+	rtnl_register(PF_UNSPEC, RTM_DELTFILTER, tc_ctl_tfilter, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_GETTFILTER, tc_ctl_tfilter,
-		      tc_dump_tfilter, NULL);
+		      tc_dump_tfilter, 0);
 
 	return 0;
+
+err_register_pernet_subsys:
+	destroy_workqueue(tc_filter_wq);
+	return err;
 }
 
 subsys_initcall(tc_filter_init);

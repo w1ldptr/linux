@@ -31,6 +31,7 @@ struct tcf_block_ext_info {
 	enum tcf_block_binder_type binder_type;
 	tcf_chain_head_change_t *chain_head_change;
 	void *chain_head_change_priv;
+	u32 block_index;
 };
 
 bool tcf_queue_work(struct work_struct *work);
@@ -47,8 +48,14 @@ void tcf_block_put(struct tcf_block *block);
 void tcf_block_put_ext(struct tcf_block *block, struct Qdisc *q,
 		       struct tcf_block_ext_info *ei);
 
+static inline bool tcf_block_shared(struct tcf_block *block)
+{
+	return block->index;
+}
+
 static inline struct Qdisc *tcf_block_q(struct tcf_block *block)
 {
+	WARN_ON(tcf_block_shared(block));
 	return block->q;
 }
 

@@ -281,8 +281,7 @@ typedef void tcf_chain_head_change_t(struct tcf_proto *tp_head, void *priv);
 
 struct tcf_chain {
 	struct tcf_proto __rcu *filter_chain;
-	tcf_chain_head_change_t *chain_head_change;
-	void *chain_head_change_priv;
+	struct list_head filter_chain_list;
 	struct list_head list;
 	struct tcf_block *block;
 	u32 index; /* chain index */
@@ -291,6 +290,8 @@ struct tcf_chain {
 
 struct tcf_block {
 	struct list_head chain_list;
+	u32 index; /* block index for shared blocks */
+	unsigned int refcnt;
 	struct net *net;
 	struct Qdisc *q;
 	struct list_head cb_list;
