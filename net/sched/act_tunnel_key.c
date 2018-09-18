@@ -166,10 +166,9 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 			return ret;
 
 		ret = ACT_P_CREATED;
-	} else {
+	} else if (!ovr) {
 		tcf_idr_release(*a, bind);
-		if (!ovr)
-			return -EEXIST;
+		return -EEXIST;
 	}
 
 	t = to_tunnel_key(*a);
@@ -177,8 +176,7 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 	ASSERT_RTNL();
 	params_new = kzalloc(sizeof(*params_new), GFP_KERNEL);
 	if (unlikely(!params_new)) {
-		if (ret == ACT_P_CREATED)
-			tcf_idr_release(*a, bind);
+		tcf_idr_release(*a, bind);
 		return -ENOMEM;
 	}
 
