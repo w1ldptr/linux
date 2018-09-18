@@ -282,44 +282,38 @@ int tcf_generic_walker(struct tc_action_net *tn, struct sk_buff *skb,
 }
 EXPORT_SYMBOL(tcf_generic_walker);
 
-static struct tc_action *tcf_idr_lookup(u32 index, struct tcf_idrinfo *idrinfo)
+static bool __tcf_idr_check(struct tc_action_net *tn, u32 index,
+			    struct tc_action **a, int bind)
 {
-	struct tc_action *p = NULL;
+	struct tcf_idrinfo *idrinfo = tn->idrinfo;
+	struct tc_action *p;
 
 	spin_lock(&idrinfo->lock);
 	p = idr_find_ext(&idrinfo->action_idr, index);
+	if (p) {
+		refcount_inc(&p->tcfa_refcnt);
+		if (bind)
+			atomic_inc(&p->tcfa_bindcnt);
+	}
 	spin_unlock(&idrinfo->lock);
 
-	return p;
+	if (p) {
+		*a = p;
+		return true;
+	}
+	return false;
 }
 
 int tcf_idr_search(struct tc_action_net *tn, struct tc_action **a, u32 index)
 {
-	struct tcf_idrinfo *idrinfo = tn->idrinfo;
-	struct tc_action *p = tcf_idr_lookup(index, idrinfo);
-
-	if (p) {
-		*a = p;
-		return 1;
-	}
-	return 0;
+	return __tcf_idr_check(tn, index, a, 0);
 }
 EXPORT_SYMBOL(tcf_idr_search);
 
 bool tcf_idr_check(struct tc_action_net *tn, u32 index, struct tc_action **a,
 		   int bind)
 {
-	struct tcf_idrinfo *idrinfo = tn->idrinfo;
-	struct tc_action *p = tcf_idr_lookup(index, idrinfo);
-
-	if (index && p) {
-		if (bind)
-			atomic_inc(&p->tcfa_bindcnt);
-		refcount_inc(&p->tcfa_refcnt);
-		*a = p;
-		return true;
-	}
-	return false;
+	return __tcf_idr_check(tn, index, a, bind);
 }
 EXPORT_SYMBOL(tcf_idr_check);
 
@@ -926,7 +920,7 @@ tcf_get_notify(struct net *net, u32 portid, struct nlmsghdr *n,
 	if (!skb)
 		return -ENOBUFS;
 	if (tca_get_fill(skb, actions, portid, n->nlmsg_seq, 0, event,
-			 0, 0) <= 0) {
+			 0, 1) <= 0) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
@@ -1053,7 +1047,7 @@ tcf_del_notify(struct net *net, struct nlmsghdr *n, struct list_head *actions,
 		return -ENOBUFS;
 
 	if (tca_get_fill(skb, actions, portid, n->nlmsg_seq, 0, RTM_DELACTION,
-			 0, 1) <= 0) {
+			 0, 2) <= 0) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
@@ -1109,14 +1103,14 @@ tca_action_gd(struct net *net, struct nlattr *nla, struct nlmsghdr *n,
 	if (event == RTM_GETACTION)
 		ret = tcf_get_notify(net, portid, n, &actions, event);
 	else { /* delete */
+		cleanup_a(&actions, 1); /* lookup took reference */
 		ret = tcf_del_notify(net, n, &actions, portid, attr_size);
 		if (ret)
 			goto err;
 		return ret;
 	}
 err:
-	if (event != RTM_GETACTION)
-		tcf_action_destroy(&actions, 0);
+	tcf_action_destroy(&actions, 0);
 	return ret;
 }
 
