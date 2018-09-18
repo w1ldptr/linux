@@ -666,7 +666,8 @@ static struct tc_cookie *nla_memdup_cookie(struct nlattr **tb)
 
 struct tc_action *tcf_action_init_1(struct net *net, struct tcf_proto *tp,
 				    struct nlattr *nla, struct nlattr *est,
-				    char *name, int ovr, int bind)
+				    char *name, int ovr, int bind,
+				    bool rtnl_held)
 {
 	struct tc_action *a;
 	struct tc_action_ops *a_o;
@@ -707,9 +708,11 @@ struct tc_action *tcf_action_init_1(struct net *net, struct tcf_proto *tp,
 	a_o = tc_lookup_action_n(act_name);
 	if (a_o == NULL) {
 #ifdef CONFIG_MODULES
-		rtnl_unlock();
+		if (rtnl_held)
+			rtnl_unlock();
 		request_module("act_%s", act_name);
-		rtnl_lock();
+		if (rtnl_held)
+			rtnl_lock();
 
 		a_o = tc_lookup_action_n(act_name);
 
@@ -730,9 +733,10 @@ struct tc_action *tcf_action_init_1(struct net *net, struct tcf_proto *tp,
 
 	/* backward compatibility for policer */
 	if (name == NULL)
-		err = a_o->init(net, tb[TCA_ACT_OPTIONS], est, &a, ovr, bind);
+		err = a_o->init(net, tb[TCA_ACT_OPTIONS], est, &a, ovr, bind,
+				rtnl_held);
 	else
-		err = a_o->init(net, nla, est, &a, ovr, bind);
+		err = a_o->init(net, nla, est, &a, ovr, bind, rtnl_held);
 	if (err < 0)
 		goto err_mod;
 
@@ -782,7 +786,8 @@ static void cleanup_a(struct list_head *actions, int ovr)
 
 int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 		    struct nlattr *est, char *name, int ovr, int bind,
-		    struct list_head *actions, size_t *attr_size)
+		    struct list_head *actions, size_t *attr_size,
+		    bool rtnl_held)
 {
 	struct nlattr *tb[TCA_ACT_MAX_PRIO + 1];
 	struct tc_action *act;
@@ -795,7 +800,8 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 		return err;
 
 	for (i = 1; i <= TCA_ACT_MAX_PRIO && tb[i]; i++) {
-		act = tcf_action_init_1(net, tp, tb[i], est, name, ovr, bind);
+		act = tcf_action_init_1(net, tp, tb[i], est, name, ovr, bind,
+					rtnl_held);
 		if (IS_ERR(act)) {
 			err = PTR_ERR(act);
 			goto err;
@@ -1135,7 +1141,7 @@ static int tcf_action_add(struct net *net, struct nlattr *nla,
 	LIST_HEAD(actions);
 
 	ret = tcf_action_init(net, NULL, nla, NULL, NULL, ovr, 0, &actions,
-			      &attr_size);
+			      &attr_size, true);
 	if (ret)
 		return ret;
 
