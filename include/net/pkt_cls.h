@@ -732,6 +732,7 @@ struct tc_cls_matchall_offload {
 struct tc_cookie {
 	u8  *data;
 	u32 len;
+	struct rcu_head rcu;
 };
 
 enum tc_clsbpf_command {
