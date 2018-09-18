@@ -127,13 +127,20 @@ static inline void qdisc_refcount_inc(struct Qdisc *qdisc)
 
 static inline bool qdisc_is_running(const struct Qdisc *qdisc)
 {
+	if (qdisc->flags & TCQ_F_NOLOCK)
+		return test_bit(__QDISC_STATE_RUNNING, &qdisc->state);
 	return (raw_read_seqcount(&qdisc->running) & 1) ? true : false;
 }
 
 static inline bool qdisc_run_begin(struct Qdisc *qdisc)
 {
-	if (qdisc_is_running(qdisc))
+
+	if (qdisc->flags & TCQ_F_NOLOCK) {
+		if (test_and_set_bit(__QDISC_STATE_RUNNING, &qdisc->state))
+			return false;
+	} else if (qdisc_is_running(qdisc)) {
 		return false;
+	}
 	/* RHEL: The seqcount structure has not lockdep functionality so
 	 * we use plain write_seqcount_begin() here.
 	 */
@@ -144,6 +151,8 @@ static inline bool qdisc_run_begin(struct Qdisc *qdisc)
 static inline void qdisc_run_end(struct Qdisc *qdisc)
 {
 	write_seqcount_end(&qdisc->running);
+	if (qdisc->flags & TCQ_F_NOLOCK)
+		clear_bit(__QDISC_STATE_RUNNING, &qdisc->state);
 }
 
 static inline bool qdisc_may_bulk(const struct Qdisc *qdisc)
