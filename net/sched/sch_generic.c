@@ -877,6 +877,11 @@ struct Qdisc *qdisc_alloc(struct netdev_queue *dev_queue,
 	spin_lock_init(&sch->busylock);
 	lockdep_set_class(&sch->busylock,
 			  dev->qdisc_tx_busylock ?: &qdisc_tx_busylock);
+ 
+	/* seqlock has the same scope of busylock, for NOLOCK qdisc */
+	spin_lock_init(&sch->seqlock);
+	lockdep_set_class(&sch->busylock,
+			  dev->qdisc_tx_busylock ?: &qdisc_tx_busylock);
 
 	seqcount_init(&sch->running);
 
@@ -1112,6 +1117,10 @@ static void dev_deactivate_queue(struct net_device *dev,
 
 	qdisc = rtnl_dereference(dev_queue->qdisc);
 	if (qdisc) {
+		bool nolock = qdisc->flags & TCQ_F_NOLOCK;
+
+		if (nolock)
+			spin_lock_bh(&qdisc->seqlock);
 		spin_lock_bh(qdisc_lock(qdisc));
 
 		if (!(qdisc->flags & TCQ_F_BUILTIN))
@@ -1121,6 +1130,8 @@ static void dev_deactivate_queue(struct net_device *dev,
 		qdisc_reset(qdisc);
 
 		spin_unlock_bh(qdisc_lock(qdisc));
+		if (nolock)
+			spin_unlock_bh(&qdisc->seqlock);
 	}
 }
 
