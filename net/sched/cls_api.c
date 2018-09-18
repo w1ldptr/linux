@@ -1387,6 +1387,7 @@ int tcf_exts_validate(struct net *net, struct tcf_proto *tp, struct nlattr **tb,
 #ifdef CONFIG_NET_CLS_ACT
 	{
 		struct tc_action *act;
+		size_t attr_size = 0;
 
 		if (exts->police && tb[exts->police]) {
 			act = tcf_action_init_1(net, tp, tb[exts->police],
@@ -1404,7 +1405,7 @@ int tcf_exts_validate(struct net *net, struct tcf_proto *tp, struct nlattr **tb,
 
 			err = tcf_action_init(net, tp, tb[exts->action],
 					      rate_tlv, NULL, ovr, TCA_ACT_BIND,
-					      &actions);
+					      &actions, &attr_size);
 			if (err)
 				return err;
 			list_for_each_entry(act, &actions, list)
