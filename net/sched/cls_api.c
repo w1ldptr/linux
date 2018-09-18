@@ -1233,7 +1233,7 @@ static int tc_del_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
 			       prio, false);
 	if (!tp || IS_ERR(tp)) {
-		err = PTR_ERR(tp);
+		err = tp ? PTR_ERR(tp) : -ENOENT;
 		goto errout;
 	} else if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
 		err = -EINVAL;
@@ -1325,7 +1325,7 @@ static int tc_get_tfilter(struct sk_buff *skb, struct nlmsghdr *n)
 	tp = tcf_chain_tp_find(chain, &chain_info, protocol,
 			       prio, false);
 	if (!tp || IS_ERR(tp)) {
-		err = PTR_ERR(tp);
+		err = tp ? PTR_ERR(tp) : -ENOENT;
 		goto errout;
 	} else if (tca[TCA_KIND] && nla_strcmp(tca[TCA_KIND], tp->ops->kind)) {
 		err = -EINVAL;
