@@ -97,7 +97,10 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 		return -EINVAL;
 
 	parm = nla_data(tb[TCA_TUNNEL_KEY_PARMS]);
-	exists = tcf_idr_check(tn, parm->index, a, bind);
+	err = tcf_idr_check_alloc(tn, &parm->index, a, bind);
+	if (err < 0)
+		return err;
+	exists = err;
 	if (exists && bind)
 		return 0;
 
@@ -163,7 +166,7 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 		ret = tcf_idr_create(tn, parm->index, est, a,
 				     &act_tunnel_key_ops, bind, true);
 		if (ret)
-			return ret;
+			goto err_out;
 
 		ret = ACT_P_CREATED;
 	} else if (!ovr) {
@@ -199,6 +202,8 @@ static int tunnel_key_init(struct net *net, struct nlattr *nla,
 err_out:
 	if (exists)
 		tcf_idr_release(*a, bind);
+	else
+		tcf_idr_cleanup(tn, parm->index);
 	return ret;
 }
 
