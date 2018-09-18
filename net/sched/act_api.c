@@ -634,6 +634,18 @@ static int tcf_action_put(struct tc_action *p)
 	return __tcf_action_put(p, false);
 }
 
+static void tcf_action_put_lst(struct list_head *actions)
+{
+	struct tc_action *a, *tmp;
+
+	list_for_each_entry_safe(a, tmp, actions, list) {
+		const struct tc_action_ops *ops = a->ops;
+
+		if (tcf_action_put(a))
+			module_put(ops->owner);
+	}
+}
+
 int
 tcf_action_dump_old(struct sk_buff *skb, struct tc_action *a, int bind, int ref)
 {
@@ -829,17 +841,6 @@ err_out:
 	return ERR_PTR(err);
 }
 
-static void cleanup_a(struct list_head *actions, int ovr)
-{
-	struct tc_action *a;
-
-	if (!ovr)
-		return;
-
-	list_for_each_entry(a, actions, list)
-		refcount_dec(&a->tcfa_refcnt);
-}
-
 int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 		    struct nlattr *est, char *name, int ovr, int bind,
 		    struct list_head *actions, size_t *attr_size,
@@ -868,11 +869,6 @@ int tcf_action_init(struct net *net, struct tcf_proto *tp, struct nlattr *nla,
 	}
 
 	*attr_size = tcf_action_full_attrs_size(sz);
-
-	/* Remove the temp refcnt which was necessary to protect against
-	 * destroying an existing action which was being replaced
-	 */
-	cleanup_a(actions, ovr);
 	return 0;
 
 err:
@@ -1185,7 +1181,7 @@ tca_action_gd(struct net *net, struct nlattr *nla, struct nlmsghdr *n,
 		return ret;
 	}
 err:
-	tcf_action_destroy(&actions, 0);
+	tcf_action_put_lst(&actions);
 	return ret;
 }
 
@@ -1226,7 +1222,11 @@ static int tcf_action_add(struct net *net, struct nlattr *nla,
 	if (ret)
 		return ret;
 
-	return tcf_add_notify(net, n, &actions, portid, attr_size);
+	ret = tcf_add_notify(net, n, &actions, portid, attr_size);
+	if (ovr)
+		tcf_action_put_lst(&actions);
+ 
+	return ret;
 }
 
 static u32 tcaa_root_flags_allowed = TCA_FLAG_LARGE_DUMP_ON;
