@@ -324,7 +324,7 @@ int tcf_idr_delete_index(struct tc_action_net *tn, u32 index)
 	int ret = 0;
 
 	spin_lock(&idrinfo->lock);
-	p = idr_find(&idrinfo->action_idr, index);
+	p = idr_find_ext(&idrinfo->action_idr, index);
 	if (!p) {
 		spin_unlock(&idrinfo->lock);
 		return -ENOENT;
@@ -334,8 +334,7 @@ int tcf_idr_delete_index(struct tc_action_net *tn, u32 index)
 		if (refcount_dec_and_test(&p->tcfa_refcnt)) {
 			struct module *owner = p->ops->owner;
 
-			WARN_ON(p != idr_remove(&idrinfo->action_idr,
-						p->tcfa_index));
+			idr_remove_ext(&idrinfo->action_idr, p->tcfa_index);
 			spin_unlock(&idrinfo->lock);
 
 			if (p->ops->cleanup)
