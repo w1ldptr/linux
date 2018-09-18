@@ -25,7 +25,7 @@ enum tcf_block_binder_type {
 };
 
 struct tcf_block_cb;
-bool tcf_queue_work(struct work_struct *work);
+bool tcf_queue_work(struct rcu_work *rwork, work_func_t func);
 
 struct tcf_block_ext_info {
 	enum tcf_block_binder_type binder_type;
@@ -34,7 +34,7 @@ struct tcf_block_ext_info {
 	u32 block_index;
 };
 
-bool tcf_queue_work(struct work_struct *work);
+bool tcf_queue_work(struct rcu_work *rwork, work_func_t func);
 
 #ifdef CONFIG_NET_CLS
 struct tcf_chain *tcf_chain_get(struct tcf_block *block, u32 chain_index,
