@@ -383,7 +383,7 @@ static int tcf_block_offload_bind(struct tcf_block *block, struct Qdisc *q,
 	struct net_device *dev = q->dev_queue->dev;
 	int err;
 
-	if (!dev->netdev_ops->ndo_setup_tc)
+	if (!get_ndo_ext(dev->netdev_ops, ndo_setup_tc_rh))
 		goto no_offload_dev_inc;
 
 	/* If tc offload feature is disabled and the block we try to bind
@@ -410,7 +410,7 @@ static void tcf_block_offload_unbind(struct tcf_block *block, struct Qdisc *q,
 	struct net_device *dev = q->dev_queue->dev;
 	int err;
 
-	if (!dev->netdev_ops->ndo_setup_tc)
+	if (!get_ndo_ext(dev->netdev_ops, ndo_setup_tc_rh))
 		goto no_offload_dev_dec;
 	err = tcf_block_offload_cmd(block, dev, ei, TC_BLOCK_UNBIND);
 	if (err == -EOPNOTSUPP)
