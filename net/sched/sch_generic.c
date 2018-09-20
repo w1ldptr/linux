@@ -28,6 +28,7 @@
 #include <linux/if_vlan.h>
 #include <linux/skb_array.h>
 #include <linux/if_macvlan.h>
+#include <linux/mutex.h>
 #include <net/sch_generic.h>
 #include <net/pkt_sched.h>
 #include <net/dst.h>
@@ -1368,11 +1369,14 @@ static void mini_qdisc_rcu_func(struct rcu_head *head)
 {
 }
 
-void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
-			  struct tcf_proto *tp_head)
+void __mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
+			    struct tcf_proto *tp_head)
 {
-	struct mini_Qdisc *miniq_old = rtnl_dereference(*miniqp->p_miniq);
+	struct mini_Qdisc *miniq_old;
 	struct mini_Qdisc *miniq;
+
+	miniq_old = rcu_dereference_protected(*miniqp->p_miniq,
+					      lockdep_is_held(&miniqp->lock));
 
 	if (!tp_head) {
 		RCU_INIT_POINTER(*miniqp->p_miniq, NULL);
@@ -1399,15 +1403,52 @@ void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
 		 */
 		call_rcu_bh(&miniq_old->rcu, mini_qdisc_rcu_func);
 }
+
+void mini_qdisc_pair_swap_work(struct work_struct *work)
+{
+	struct mini_Qdisc_pair *miniqp = container_of(work,
+						      struct mini_Qdisc_pair,
+						      work);
+	struct tcf_proto *tp_head;
+
+	mutex_lock(&miniqp->lock);
+	tp_head = xchg(&miniqp->tp_head, ERR_PTR(-ENOENT));
+	if (!IS_ERR(tp_head))
+		__mini_qdisc_pair_swap(miniqp, tp_head);
+	mutex_unlock(&miniqp->lock);
+}
+
+void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
+			  struct tcf_proto *tp_head, bool atomic)
+{
+	if (atomic) {
+		xchg(&miniqp->tp_head, tp_head);
+		tc_queue_proto_work(&miniqp->work);
+	} else {
+		mutex_lock(&miniqp->lock);
+		xchg(&miniqp->tp_head, ERR_PTR(-ENOENT));
+		__mini_qdisc_pair_swap(miniqp, tp_head);
+		mutex_unlock(&miniqp->lock);
+	}
+}
 EXPORT_SYMBOL(mini_qdisc_pair_swap);
 
 void mini_qdisc_pair_init(struct mini_Qdisc_pair *miniqp, struct Qdisc *qdisc,
 			  struct mini_Qdisc __rcu **p_miniq)
 {
+	mutex_init(&miniqp->lock);
 	miniqp->miniq1.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq1.cpu_qstats = qdisc->cpu_qstats;
 	miniqp->miniq2.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq2.cpu_qstats = qdisc->cpu_qstats;
 	miniqp->p_miniq = p_miniq;
+	INIT_WORK(&miniqp->work, mini_qdisc_pair_swap_work);
 }
 EXPORT_SYMBOL(mini_qdisc_pair_init);
+
+void mini_qdisc_pair_cleanup(struct mini_Qdisc_pair *miniqp)
+{
+	cancel_work_sync(&miniqp->work);
+	mutex_destroy(&miniqp->lock);
+}
+EXPORT_SYMBOL(mini_qdisc_pair_cleanup);
