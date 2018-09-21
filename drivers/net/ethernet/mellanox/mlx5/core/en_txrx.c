@@ -30,79 +30,48 @@
  * SOFTWARE.
  */
 
+#if defined(HAVE_IRQ_DESC_GET_IRQ_DATA) && defined(HAVE_IRQ_TO_DESC_EXPORTED)
+#include <linux/irq.h>
+#endif
 #include "en.h"
 
-struct mlx5_cqe64 *mlx5e_get_cqe(struct mlx5e_cq *cq)
+#if defined(HAVE_IRQ_DESC_GET_IRQ_DATA) && defined(HAVE_IRQ_TO_DESC_EXPORTED)
+static inline bool mlx5e_channel_no_affinity_change(struct mlx5e_channel *c)
 {
-	struct mlx5_cqwq *wq = &cq->wq;
-	u32 ci = mlx5_cqwq_get_ci(wq);
-	struct mlx5_cqe64 *cqe = mlx5_cqwq_get_wqe(wq, ci);
-	int cqe_ownership_bit = cqe->op_own & MLX5_CQE_OWNER_MASK;
-	int sw_ownership_val = mlx5_cqwq_get_wrap_cnt(wq) & 1;
+	int current_cpu = smp_processor_id();
+	const struct cpumask *aff;
+#ifndef HAVE_IRQ_DATA_AFFINITY
+	struct irq_data *idata;
 
-	if (cqe_ownership_bit != sw_ownership_val)
-		return NULL;
+	idata = irq_desc_get_irq_data(c->irq_desc);
+	aff = irq_data_get_affinity_mask(idata);
+#else
+	aff = irq_desc_get_irq_data(c->irq_desc)->affinity;
+#endif
+	return cpumask_test_cpu(current_cpu, aff);
+}
+#endif
 
-	/* ensure cqe content is read after cqe ownership bit */
-	rmb();
+static void mlx5e_handle_tx_dim(struct mlx5e_txqsq *sq)
+{
+	struct net_dim_sample *sample = &sq->dim_obj.sample;
 
-	return cqe;
+	if (unlikely(!MLX5E_TEST_BIT(sq->state, MLX5E_SQ_STATE_AM)))
+		return;
+
+	net_dim_sample(sq->cq.event_ctr, sample->pkt_ctr, sample->byte_ctr, sample);
+	net_dim(&sq->dim_obj.dim, *sample);
 }
 
-static void mlx5e_poll_ico_cq(struct mlx5e_cq *cq)
+static void mlx5e_handle_rx_dim(struct mlx5e_rq *rq)
 {
-	struct mlx5e_sq *sq = container_of(cq, struct mlx5e_sq, cq);
-	struct mlx5_wq_cyc *wq;
-	struct mlx5_cqe64 *cqe;
-	u16 sqcc;
+	struct net_dim_sample *sample = &rq->dim_obj.sample;
 
-	if (unlikely(!test_bit(MLX5E_SQ_STATE_ENABLED, &sq->state)))
+	if (unlikely(!MLX5E_TEST_BIT(rq->state, MLX5E_RQ_STATE_AM)))
 		return;
 
-	cqe = mlx5e_get_cqe(cq);
-	if (likely(!cqe))
-		return;
-
-	wq = &sq->wq;
-
-	/* sq->cc must be updated only after mlx5_cqwq_update_db_record(),
-	 * otherwise a cq overrun may occur
-	 */
-	sqcc = sq->cc;
-
-	do {
-		u16 ci = be16_to_cpu(cqe->wqe_counter) & wq->sz_m1;
-		struct mlx5e_ico_wqe_info *icowi = &sq->db.ico_wqe[ci];
-
-		mlx5_cqwq_pop(&cq->wq);
-		sqcc += icowi->num_wqebbs;
-
-		if (unlikely((cqe->op_own >> 4) != MLX5_CQE_REQ)) {
-			WARN_ONCE(true, "mlx5e: Bad OP in ICOSQ CQE: 0x%x\n",
-				  cqe->op_own);
-			break;
-		}
-
-		switch (icowi->opcode) {
-		case MLX5_OPCODE_NOP:
-			break;
-		case MLX5_OPCODE_UMR:
-			mlx5e_post_rx_mpwqe(&sq->channel->rq);
-			break;
-		default:
-			WARN_ONCE(true,
-				  "mlx5e: Bad OPCODE in ICOSQ WQE info: 0x%x\n",
-				  icowi->opcode);
-		}
-
-	} while ((cqe = mlx5e_get_cqe(cq)));
-
-	mlx5_cqwq_update_db_record(&cq->wq);
-
-	/* ensure cq space is freed before enabling more cqes */
-	wmb();
-
-	sq->cc = sqcc;
+	net_dim_sample(rq->cq.event_ctr, sample->pkt_ctr, sample->byte_ctr, sample);
+	net_dim(&rq->dim_obj.dim, *sample);
 }
 
 int mlx5e_napi_poll(struct napi_struct *napi, int budget)
@@ -110,7 +79,7 @@ int mlx5e_napi_poll(struct napi_struct *napi, int budget)
 	struct mlx5e_channel *c = container_of(napi, struct mlx5e_channel,
 					       napi);
 	bool busy = false;
-	int work_done;
+	int work_done = 0;
 	int i;
 
 	clear_bit(MLX5E_CHANNEL_NAPI_SCHED, &c->flags);
@@ -118,15 +87,34 @@ int mlx5e_napi_poll(struct napi_struct *napi, int budget)
 	for (i = 0; i < c->num_tc; i++)
 		busy |= mlx5e_poll_tx_cq(&c->sq[i].cq, budget);
 
-	work_done = mlx5e_poll_rx_cq(&c->rq.cq, budget);
-	busy |= work_done == budget;
+#ifdef CONFIG_MLX5_EN_SPECIAL_SQ
+	for (i = 0; i < c->num_special_sq; i++)
+		busy |= mlx5e_poll_tx_cq(&c->special_sq[i].cq, budget);
+#endif
 
-	mlx5e_poll_ico_cq(&c->icosq.cq);
+#ifdef HAVE_NETDEV_BPF
+	if (c->xdp)
+		busy |= mlx5e_poll_xdpsq_cq(&c->rq.xdpsq.cq);
+#endif
 
-	busy |= mlx5e_post_rx_wqes(&c->rq);
+	if (likely(budget)) { /* budget=0 means: don't poll rx rings */
+		work_done = mlx5e_poll_rx_cq(&c->rq.cq, budget);
+		busy |= work_done == budget;
+	}
 
+	busy |= c->rq.post_wqes(&c->rq);
+
+#if defined(HAVE_IRQ_DESC_GET_IRQ_DATA) && defined(HAVE_IRQ_TO_DESC_EXPORTED)
+	if (busy) {
+		if (likely(mlx5e_channel_no_affinity_change(c)))
+			return budget;
+		if (budget && work_done == budget)
+			work_done--;
+	}
+#else
 	if (busy)
 		return budget;
+#endif
 
 	napi_complete_done(napi, work_done);
 
@@ -136,11 +124,17 @@ int mlx5e_napi_poll(struct napi_struct *napi, int budget)
 		return work_done;
 	}
 
-	for (i = 0; i < c->num_tc; i++)
+	for (i = 0; i < c->num_tc; i++) {
+		mlx5e_handle_tx_dim(&c->sq[i]);
 		mlx5e_cq_arm(&c->sq[i].cq);
+	}
 
-	if (test_bit(MLX5E_RQ_STATE_AM, &c->rq.state))
-		mlx5e_rx_am(&c->rq);
+#ifdef CONFIG_MLX5_EN_SPECIAL_SQ
+	for (i = 0; i < c->num_special_sq; i++)
+		mlx5e_cq_arm(&c->special_sq[i].cq);
+#endif
+
+	mlx5e_handle_rx_dim(&c->rq);
 
 	mlx5e_cq_arm(&c->rq.cq);
 	mlx5e_cq_arm(&c->icosq.cq);
@@ -161,8 +155,7 @@ void mlx5e_cq_error_event(struct mlx5_core_cq *mcq, enum mlx5_event event)
 {
 	struct mlx5e_cq *cq = container_of(mcq, struct mlx5e_cq, mcq);
 	struct mlx5e_channel *c = cq->channel;
-	struct mlx5e_priv *priv = c->priv;
-	struct net_device *netdev = priv->netdev;
+	struct net_device *netdev = c->netdev;
 
 	netdev_err(netdev, "%s: cqn=0x%.6x event=0x%.2x\n",
 		   __func__, mcq->cqn, event);

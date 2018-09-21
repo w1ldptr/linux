@@ -30,7 +30,6 @@
  * SOFTWARE.
  */
 
-
 #include <linux/gfp.h>
 #include <linux/export.h>
 #include <linux/mlx5/cmd.h>
@@ -40,8 +39,8 @@
 
 #include "mlx5_core.h"
 
-static struct mlx5_core_rsc_common *mlx5_get_rsc(struct mlx5_core_dev *dev,
-						 u32 rsn)
+struct mlx5_core_rsc_common *mlx5_core_get_rsc(struct mlx5_core_dev *dev,
+					       u32 rsn)
 {
 	struct mlx5_qp_table *table = &dev->priv.qp_table;
 	struct mlx5_core_rsc_common *common;
@@ -79,7 +78,10 @@ static u64 qp_allowed_event_types(void)
 	       BIT(MLX5_EVENT_TYPE_WQ_CATAS_ERROR) |
 	       BIT(MLX5_EVENT_TYPE_PATH_MIG_FAILED) |
 	       BIT(MLX5_EVENT_TYPE_WQ_INVAL_REQ_ERROR) |
-	       BIT(MLX5_EVENT_TYPE_WQ_ACCESS_ERROR);
+	       BIT(MLX5_EVENT_TYPE_WQ_ACCESS_ERROR) |
+	       BIT(MLX5_EVENT_TYPE_XRQ_ERROR) |
+	       BIT(MLX5_EVENT_TYPE_DCT_DRAINED) |
+	       BIT(MLX5_EVENT_TYPE_DCT_KEY_VIOLATION);
 
 	return mask;
 }
@@ -114,18 +116,21 @@ static bool is_event_type_allowed(int rsc_type, int event_type)
 	}
 }
 
-void mlx5_rsc_event(struct mlx5_core_dev *dev, u32 rsn, int event_type)
+int mlx5_rsc_event(struct mlx5_core_dev *dev, u32 rsn, int event_info)
 {
-	struct mlx5_core_rsc_common *common = mlx5_get_rsc(dev, rsn);
+	struct mlx5_core_rsc_common *common = mlx5_core_get_rsc(dev, rsn);
+	struct mlx5_core_dct *dct;
 	struct mlx5_core_qp *qp;
+	int event_type = event_info & 0xff;
 
 	if (!common)
-		return;
+		return -1;
 
 	if (!is_event_type_allowed((rsn >> MLX5_USER_INDEX_LEN), event_type)) {
 		mlx5_core_warn(dev, "event 0x%.2x is not allowed on resource 0x%.8x\n",
 			       event_type, rsn);
-		return;
+		mlx5_core_put_rsc(common);
+		return -1;
 	}
 
 	switch (common->res) {
@@ -133,7 +138,14 @@ void mlx5_rsc_event(struct mlx5_core_dev *dev, u32 rsn, int event_type)
 	case MLX5_RES_RQ:
 	case MLX5_RES_SQ:
 		qp = (struct mlx5_core_qp *)common;
-		qp->event(qp, event_type);
+		qp->event(qp, event_info);
+		break;
+	case MLX5_RES_DCT:
+		dct = (struct mlx5_core_dct *)common;
+		if (event_type == MLX5_EVENT_TYPE_DCT_DRAINED)
+			complete(&dct->drained);
+		else
+			dct->event(dct, event_type);
 		break;
 
 	default:
@@ -141,96 +153,8 @@ void mlx5_rsc_event(struct mlx5_core_dev *dev, u32 rsn, int event_type)
 	}
 
 	mlx5_core_put_rsc(common);
+	return 0;
 }
-
-#ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-void mlx5_eq_pagefault(struct mlx5_core_dev *dev, struct mlx5_eqe *eqe)
-{
-	struct mlx5_eqe_page_fault *pf_eqe = &eqe->data.page_fault;
-	int qpn = be32_to_cpu(pf_eqe->flags_qpn) & MLX5_QPN_MASK;
-	struct mlx5_core_rsc_common *common = mlx5_get_rsc(dev, qpn);
-	struct mlx5_core_qp *qp =
-		container_of(common, struct mlx5_core_qp, common);
-	struct mlx5_pagefault pfault;
-
-	if (!qp) {
-		mlx5_core_warn(dev, "ODP event for non-existent QP %06x\n",
-			       qpn);
-		return;
-	}
-
-	pfault.event_subtype = eqe->sub_type;
-	pfault.flags = (be32_to_cpu(pf_eqe->flags_qpn) >> MLX5_QPN_BITS) &
-		(MLX5_PFAULT_REQUESTOR | MLX5_PFAULT_WRITE | MLX5_PFAULT_RDMA);
-	pfault.bytes_committed = be32_to_cpu(
-		pf_eqe->bytes_committed);
-
-	mlx5_core_dbg(dev,
-		      "PAGE_FAULT: subtype: 0x%02x, flags: 0x%02x,\n",
-		      eqe->sub_type, pfault.flags);
-
-	switch (eqe->sub_type) {
-	case MLX5_PFAULT_SUBTYPE_RDMA:
-		/* RDMA based event */
-		pfault.rdma.r_key =
-			be32_to_cpu(pf_eqe->rdma.r_key);
-		pfault.rdma.packet_size =
-			be16_to_cpu(pf_eqe->rdma.packet_length);
-		pfault.rdma.rdma_op_len =
-			be32_to_cpu(pf_eqe->rdma.rdma_op_len);
-		pfault.rdma.rdma_va =
-			be64_to_cpu(pf_eqe->rdma.rdma_va);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: qpn: 0x%06x, r_key: 0x%08x,\n",
-			      qpn, pfault.rdma.r_key);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: rdma_op_len: 0x%08x,\n",
-			      pfault.rdma.rdma_op_len);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: rdma_va: 0x%016llx,\n",
-			      pfault.rdma.rdma_va);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: bytes_committed: 0x%06x\n",
-			      pfault.bytes_committed);
-		break;
-
-	case MLX5_PFAULT_SUBTYPE_WQE:
-		/* WQE based event */
-		pfault.wqe.wqe_index =
-			be16_to_cpu(pf_eqe->wqe.wqe_index);
-		pfault.wqe.packet_size =
-			be16_to_cpu(pf_eqe->wqe.packet_length);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: qpn: 0x%06x, wqe_index: 0x%04x,\n",
-			      qpn, pfault.wqe.wqe_index);
-		mlx5_core_dbg(dev,
-			      "PAGE_FAULT: bytes_committed: 0x%06x\n",
-			      pfault.bytes_committed);
-		break;
-
-	default:
-		mlx5_core_warn(dev,
-			       "Unsupported page fault event sub-type: 0x%02hhx, QP %06x\n",
-			       eqe->sub_type, qpn);
-		/* Unsupported page faults should still be resolved by the
-		 * page fault handler
-		 */
-	}
-
-	if (qp->pfault_handler) {
-		qp->pfault_handler(qp, &pfault);
-	} else {
-		mlx5_core_err(dev,
-			      "ODP event for QP %08x, without a fault handler in QP\n",
-			      qpn);
-		/* Page fault will remain unresolved. QP will hang until it is
-		 * destroyed
-		 */
-	}
-
-	mlx5_core_put_rsc(common);
-}
-#endif
 
 static int create_qprqsq_common(struct mlx5_core_dev *dev,
 				struct mlx5_core_qp *qp,
@@ -250,6 +174,7 @@ static int create_qprqsq_common(struct mlx5_core_dev *dev,
 
 	atomic_set(&qp->common.refcount, 1);
 	init_completion(&qp->common.free);
+	spin_lock_init(&qp->common.lock);
 	qp->pid = current->pid;
 
 	return 0;
@@ -296,6 +221,8 @@ int mlx5_core_create_qp(struct mlx5_core_dev *dev,
 		mlx5_core_dbg(dev, "failed adding QP 0x%x to debug file system\n",
 			      qp->qpn);
 
+	qp->pfault_req = NULL;
+	qp->pfault_res = NULL;
 	atomic_inc(&dev->num_qps);
 
 	return 0;
@@ -303,8 +230,8 @@ int mlx5_core_create_qp(struct mlx5_core_dev *dev,
 err_cmd:
 	memset(din, 0, sizeof(din));
 	memset(dout, 0, sizeof(dout));
-	MLX5_SET(destroy_qp_in, in, opcode, MLX5_CMD_OP_DESTROY_QP);
-	MLX5_SET(destroy_qp_in, in, qpn, qp->qpn);
+	MLX5_SET(destroy_qp_in, din, opcode, MLX5_CMD_OP_DESTROY_QP);
+	MLX5_SET(destroy_qp_in, din, qpn, qp->qpn);
 	mlx5_cmd_exec(dev, din, sizeof(din), dout, sizeof(dout));
 	return err;
 }
@@ -331,6 +258,20 @@ int mlx5_core_destroy_qp(struct mlx5_core_dev *dev,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(mlx5_core_destroy_qp);
+
+int mlx5_core_set_delay_drop(struct mlx5_core_dev *dev,
+			     u32 timeout_usec)
+{
+	u32 out[MLX5_ST_SZ_DW(set_delay_drop_params_out)] = {0};
+	u32 in[MLX5_ST_SZ_DW(set_delay_drop_params_in)]   = {0};
+
+	MLX5_SET(set_delay_drop_params_in, in, opcode,
+		 MLX5_CMD_OP_SET_DELAY_DROP_PARAMS);
+	MLX5_SET(set_delay_drop_params_in, in, delay_drop_timeout,
+		 timeout_usec / 100);
+	return mlx5_cmd_exec(dev, in, sizeof(in), out, sizeof(out));
+}
+EXPORT_SYMBOL_GPL(mlx5_core_set_delay_drop);
 
 struct mbox_info {
 	u32 *in;
@@ -506,31 +447,6 @@ int mlx5_core_xrcd_dealloc(struct mlx5_core_dev *dev, u32 xrcdn)
 }
 EXPORT_SYMBOL_GPL(mlx5_core_xrcd_dealloc);
 
-#ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-int mlx5_core_page_fault_resume(struct mlx5_core_dev *dev, u32 qpn,
-				u8 flags, int error)
-{
-	u32 out[MLX5_ST_SZ_DW(page_fault_resume_out)] = {0};
-	u32 in[MLX5_ST_SZ_DW(page_fault_resume_in)]   = {0};
-
-	MLX5_SET(page_fault_resume_in, in, opcode,
-		 MLX5_CMD_OP_PAGE_FAULT_RESUME);
-	MLX5_SET(page_fault_resume_in, in, qpn, qpn);
-
-	if (flags & MLX5_PAGE_FAULT_RESUME_REQUESTOR)
-		MLX5_SET(page_fault_resume_in, in, req_res, 1);
-	if (flags & MLX5_PAGE_FAULT_RESUME_WRITE)
-		MLX5_SET(page_fault_resume_in, in, read_write, 1);
-	if (flags & MLX5_PAGE_FAULT_RESUME_RDMA)
-		MLX5_SET(page_fault_resume_in, in, rdma, 1);
-	if (error)
-		MLX5_SET(page_fault_resume_in, in, error, 1);
-
-	return mlx5_cmd_exec(dev, in, sizeof(in), out, sizeof(out));
-}
-EXPORT_SYMBOL_GPL(mlx5_core_page_fault_resume);
-#endif
-
 int mlx5_core_create_rq_tracked(struct mlx5_core_dev *dev, u32 *in, int inlen,
 				struct mlx5_core_qp *rq)
 {
@@ -633,23 +549,3 @@ int mlx5_core_query_q_counter(struct mlx5_core_dev *dev, u16 counter_id,
 	return mlx5_cmd_exec(dev, in, sizeof(in), out, out_size);
 }
 EXPORT_SYMBOL_GPL(mlx5_core_query_q_counter);
-
-int mlx5_core_query_out_of_buffer(struct mlx5_core_dev *dev, u16 counter_id,
-				  u32 *out_of_buffer)
-{
-	int outlen = MLX5_ST_SZ_BYTES(query_q_counter_out);
-	void *out;
-	int err;
-
-	out = mlx5_vzalloc(outlen);
-	if (!out)
-		return -ENOMEM;
-
-	err = mlx5_core_query_q_counter(dev, counter_id, 0, out, outlen);
-	if (!err)
-		*out_of_buffer = MLX5_GET(query_q_counter_out, out,
-					  out_of_buffer);
-
-	kfree(out);
-	return err;
-}

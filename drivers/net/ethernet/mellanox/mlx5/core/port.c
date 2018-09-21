@@ -47,8 +47,8 @@ int mlx5_core_access_reg(struct mlx5_core_dev *dev, void *data_in,
 	u32 *in = NULL;
 	void *data;
 
-	in = mlx5_vzalloc(inlen);
-	out = mlx5_vzalloc(outlen);
+	in = kvzalloc(inlen, GFP_KERNEL);
+	out = kvzalloc(outlen, GFP_KERNEL);
 	if (!in || !out)
 		goto out;
 
@@ -96,6 +96,18 @@ int mlx5_query_mcam_reg(struct mlx5_core_dev *dev, u32 *mcam, u8 feature_group,
 	MLX5_SET(mcam_reg, in, access_reg_group, access_reg_group);
 
 	return mlx5_core_access_reg(dev, in, sz, mcam, sz, MLX5_REG_MCAM, 0, 0);
+}
+
+int mlx5_query_qcam_reg(struct mlx5_core_dev *mdev, u32 *qcam,
+			u8 feature_group, u8 access_reg_group)
+{
+	u32 in[MLX5_ST_SZ_DW(qcam_reg)] = {};
+	int sz = MLX5_ST_SZ_BYTES(qcam_reg);
+
+	MLX5_SET(qcam_reg, in, feature_group, feature_group);
+	MLX5_SET(qcam_reg, in, access_reg_group, access_reg_group);
+
+	return mlx5_core_access_reg(mdev, in, sz, qcam, sz, MLX5_REG_QCAM, 0, 0);
 }
 
 struct mlx5_reg_pcap {
@@ -349,7 +361,7 @@ void mlx5_query_port_oper_mtu(struct mlx5_core_dev *dev, u16 *oper_mtu,
 }
 EXPORT_SYMBOL_GPL(mlx5_query_port_oper_mtu);
 
-static int mlx5_query_module_num(struct mlx5_core_dev *dev, int *module_num)
+int mlx5_query_module_num(struct mlx5_core_dev *dev, int *module_num)
 {
 	u32 in[MLX5_ST_SZ_DW(pmlp_reg)] = {0};
 	u32 out[MLX5_ST_SZ_DW(pmlp_reg)];
@@ -367,6 +379,7 @@ static int mlx5_query_module_num(struct mlx5_core_dev *dev, int *module_num)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(mlx5_query_module_num);
 
 int mlx5_query_module_eeprom(struct mlx5_core_dev *dev,
 			     u16 offset, u16 size, u8 *data)
@@ -454,7 +467,7 @@ int mlx5_core_query_ib_ppcnt(struct mlx5_core_dev *dev,
 	u32 *in;
 	int err;
 
-	in  = mlx5_vzalloc(sz);
+	in  = kvzalloc(sz, GFP_KERNEL);
 	if (!in) {
 		err = -ENOMEM;
 		return err;
@@ -470,6 +483,16 @@ int mlx5_core_query_ib_ppcnt(struct mlx5_core_dev *dev,
 	return err;
 }
 EXPORT_SYMBOL_GPL(mlx5_core_query_ib_ppcnt);
+
+static int mlx5_query_pfcc_reg(struct mlx5_core_dev *dev, u32 *out, u32 out_size)
+{
+	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
+
+	MLX5_SET(pfcc_reg, in, local_port, 1);
+
+	return mlx5_core_access_reg(dev, in, sizeof(in), out,
+				    out_size, MLX5_REG_PFCC, 0, 0);
+}
 
 int mlx5_set_port_pause(struct mlx5_core_dev *dev, u32 rx_pause, u32 tx_pause)
 {
@@ -488,13 +511,10 @@ EXPORT_SYMBOL_GPL(mlx5_set_port_pause);
 int mlx5_query_port_pause(struct mlx5_core_dev *dev,
 			  u32 *rx_pause, u32 *tx_pause)
 {
-	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
 	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
 	int err;
 
-	MLX5_SET(pfcc_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(dev, in, sizeof(in), out,
-				   sizeof(out), MLX5_REG_PFCC, 0, 0);
+	err = mlx5_query_pfcc_reg(dev, out, sizeof(out));
 	if (err)
 		return err;
 
@@ -507,6 +527,42 @@ int mlx5_query_port_pause(struct mlx5_core_dev *dev,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(mlx5_query_port_pause);
+
+int mlx5_set_port_pfc_prevention(struct mlx5_core_dev *dev,
+				 u16 pfc_preven_critical, u16 pfc_preven_minor)
+{
+	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
+	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
+
+	MLX5_SET(pfcc_reg, in, local_port, 1);
+	MLX5_SET(pfcc_reg, in, pptx_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, pprx_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, ppan_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, critical_stall_mask, 1);
+	MLX5_SET(pfcc_reg, in, minor_stall_mask, 1);
+	MLX5_SET(pfcc_reg, in, device_stall_critical_watermark, pfc_preven_critical);
+	MLX5_SET(pfcc_reg, in, device_stall_minor_watermark, pfc_preven_minor);
+
+	return mlx5_core_access_reg(dev, in, sizeof(in), out,
+				    sizeof(out), MLX5_REG_PFCC, 0, 1);
+}
+
+int mlx5_query_port_pfc_prevention(struct mlx5_core_dev *dev,
+				   u16 *pfc_preven_critical)
+{
+	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
+	int err;
+
+	err = mlx5_query_pfcc_reg(dev, out, sizeof(out));
+	if (err)
+		return err;
+
+	if (pfc_preven_critical)
+		*pfc_preven_critical = MLX5_GET(pfcc_reg, out,
+						device_stall_critical_watermark);
+
+	return 0;
+}
 
 int mlx5_set_port_pfc(struct mlx5_core_dev *dev, u8 pfc_en_tx, u8 pfc_en_rx)
 {
@@ -526,13 +582,10 @@ EXPORT_SYMBOL_GPL(mlx5_set_port_pfc);
 
 int mlx5_query_port_pfc(struct mlx5_core_dev *dev, u8 *pfc_en_tx, u8 *pfc_en_rx)
 {
-	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
 	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
 	int err;
 
-	MLX5_SET(pfcc_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(dev, in, sizeof(in), out,
-				   sizeof(out), MLX5_REG_PFCC, 0, 0);
+	err = mlx5_query_pfcc_reg(dev, out, sizeof(out));
 	if (err)
 		return err;
 
@@ -677,6 +730,27 @@ int mlx5_set_port_tc_group(struct mlx5_core_dev *mdev, u8 *tc_group)
 }
 EXPORT_SYMBOL_GPL(mlx5_set_port_tc_group);
 
+int mlx5_query_port_tc_group(struct mlx5_core_dev *mdev,
+			     u8 tc, u8 *tc_group)
+{
+	u32 out[MLX5_ST_SZ_DW(qetc_reg)];
+	void *ets_tcn_conf;
+	int err;
+
+	err = mlx5_query_port_qetcr_reg(mdev, out, sizeof(out));
+	if (err)
+		return err;
+
+	ets_tcn_conf = MLX5_ADDR_OF(qetc_reg, out,
+				    tc_configuration[tc]);
+
+	*tc_group = MLX5_GET(ets_tcn_config_reg, ets_tcn_conf,
+			     group);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(mlx5_query_port_tc_group);
+
 int mlx5_set_port_tc_bw_alloc(struct mlx5_core_dev *mdev, u8 *tc_bw)
 {
 	u32 in[MLX5_ST_SZ_DW(qetc_reg)] = {0};
@@ -788,6 +862,108 @@ int mlx5_query_port_wol(struct mlx5_core_dev *mdev, u8 *wol_mode)
 	return err;
 }
 EXPORT_SYMBOL_GPL(mlx5_query_port_wol);
+
+static int mlx5_query_pddr(struct mlx5_core_dev *mdev,
+			   int page_select, u32 *out, int outlen)
+{
+	u32 in[MLX5_ST_SZ_DW(pddr_reg)] = {0};
+
+	if (!MLX5_CAP_PCAM_REG(mdev, pddr))
+		return -EOPNOTSUPP;
+
+	MLX5_SET(pddr_reg, in, local_port, 1);
+	MLX5_SET(pddr_reg, in, page_select, page_select);
+
+	return mlx5_core_access_reg(mdev, in, sizeof(in), out, outlen, MLX5_REG_PDDR, 0, 0);
+}
+
+int mlx5_query_pddr_troubleshooting_info(struct mlx5_core_dev *mdev,
+					 u16 *monitor_opcode,
+					 u8 *status_message)
+{
+	int outlen = MLX5_ST_SZ_BYTES(pddr_reg);
+	u32 out[MLX5_ST_SZ_DW(pddr_reg)] = {0};
+	int err;
+
+	err = mlx5_query_pddr(mdev, MLX5_PDDR_TROUBLESHOOTING_INFO_PAGE,
+			      out, outlen);
+	if (err)
+		return err;
+
+	if (monitor_opcode)
+		*monitor_opcode = MLX5_GET(pddr_reg, out,
+					   page_data.troubleshooting_info_page.status_opcode.monitor_opcodes);
+
+	if (status_message)
+		strncpy(status_message,
+			MLX5_ADDR_OF(pddr_reg, out, page_data.troubleshooting_info_page.status_message),
+			MLX5_FLD_SZ_BYTES(troubleshooting_info_page_layout, status_message));
+
+	return 0;
+}
+
+int mlx5_query_port_cong_status(struct mlx5_core_dev *mdev, int protocol,
+				int priority, int *is_enable)
+{
+	u32 in[MLX5_ST_SZ_DW(query_cong_status_in)];
+	u32 out[MLX5_ST_SZ_DW(query_cong_status_out)];
+	int err;
+
+	memset(in, 0, sizeof(in));
+	memset(out, 0, sizeof(out));
+
+	MLX5_SET(query_cong_status_in, in, opcode,
+		 MLX5_CMD_OP_QUERY_CONG_STATUS);
+	MLX5_SET(query_cong_status_in, in, cong_protocol, protocol);
+	MLX5_SET(query_cong_status_in, in, priority, priority);
+
+	err = mlx5_cmd_exec(mdev, in, sizeof(in), out, sizeof(out));
+	if (!err)
+		*is_enable = MLX5_GET(query_cong_status_out, out, enable);
+	return err;
+}
+
+int mlx5_modify_port_cong_status(struct mlx5_core_dev *mdev, int protocol,
+				 int priority, int enable)
+{
+	u32 in[MLX5_ST_SZ_DW(modify_cong_status_in)];
+	u32 out[MLX5_ST_SZ_DW(modify_cong_status_out)];
+
+	memset(in, 0, sizeof(in));
+	memset(out, 0, sizeof(out));
+
+	MLX5_SET(modify_cong_status_in, in, opcode,
+		 MLX5_CMD_OP_MODIFY_CONG_STATUS);
+	MLX5_SET(modify_cong_status_in, in, cong_protocol, protocol);
+	MLX5_SET(modify_cong_status_in, in, priority, priority);
+	MLX5_SET(modify_cong_status_in, in, enable, enable);
+
+	return mlx5_cmd_exec(mdev, in, sizeof(in), out, sizeof(out));
+}
+
+int mlx5_query_port_cong_params(struct mlx5_core_dev *mdev, int protocol,
+				void *out, int out_size)
+{
+	u32 in[MLX5_ST_SZ_DW(query_cong_params_in)];
+
+	memset(in, 0, sizeof(in));
+
+	MLX5_SET(query_cong_params_in, in, opcode,
+		 MLX5_CMD_OP_QUERY_CONG_PARAMS);
+	MLX5_SET(query_cong_params_in, in, cong_protocol, protocol);
+
+	return mlx5_cmd_exec(mdev, in, sizeof(in), out, out_size);
+}
+
+int mlx5_modify_port_cong_params(struct mlx5_core_dev *mdev,
+				 void *in, int in_size)
+{
+	u32 out[MLX5_ST_SZ_DW(modify_cong_params_out)];
+
+	memset(out, 0, sizeof(out));
+
+	return mlx5_cmd_exec(mdev, in, in_size, out, sizeof(out));
+}
 
 static int mlx5_query_ports_check(struct mlx5_core_dev *mdev, u32 *out,
 				  int outlen)
@@ -937,4 +1113,452 @@ int mlx5_set_mtppse(struct mlx5_core_dev *mdev, u8 pin, u8 arm, u8 mode)
 
 	return mlx5_core_access_reg(mdev, in, sizeof(in), out,
 				    sizeof(out), MLX5_REG_MTPPSE, 0, 1);
+}
+
+int mlx5_set_trust_state(struct mlx5_core_dev *mdev, u8 trust_state)
+{
+	u32 out[MLX5_ST_SZ_DW(qpts_reg)] = {};
+	u32 in[MLX5_ST_SZ_DW(qpts_reg)] = {};
+	int err;
+
+	MLX5_SET(qpts_reg, in, local_port, 1);
+	MLX5_SET(qpts_reg, in, trust_state, trust_state);
+
+	err = mlx5_core_access_reg(mdev, in, sizeof(in), out,
+				   sizeof(out), MLX5_REG_QPTS, 0, 1);
+	return err;
+}
+
+int mlx5_query_trust_state(struct mlx5_core_dev *mdev, u8 *trust_state)
+{
+	u32 out[MLX5_ST_SZ_DW(qpts_reg)] = {};
+	u32 in[MLX5_ST_SZ_DW(qpts_reg)] = {};
+	int err;
+
+	MLX5_SET(qpts_reg, in, local_port, 1);
+
+	err = mlx5_core_access_reg(mdev, in, sizeof(in), out,
+				   sizeof(out), MLX5_REG_QPTS, 0, 0);
+	if (!err)
+		*trust_state = MLX5_GET(qpts_reg, out, trust_state);
+
+	return err;
+}
+
+int mlx5_set_dscp2prio(struct mlx5_core_dev *mdev, u8 dscp, u8 prio)
+{
+	int sz = MLX5_ST_SZ_BYTES(qpdpm_reg);
+	void *qpdpm_dscp;
+	void *out;
+	void *in;
+	int err;
+
+	in = kzalloc(sz, GFP_KERNEL);
+	out = kzalloc(sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	MLX5_SET(qpdpm_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_QPDPM, 0, 0);
+	if (err)
+		goto out;
+
+	memcpy(in, out, sz);
+	MLX5_SET(qpdpm_reg, in, local_port, 1);
+
+	/* Update the corresponding dscp entry */
+	qpdpm_dscp = MLX5_ADDR_OF(qpdpm_reg, in, dscp[dscp]);
+	MLX5_SET16(qpdpm_dscp_reg, qpdpm_dscp, prio, prio);
+	MLX5_SET16(qpdpm_dscp_reg, qpdpm_dscp, e, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_QPDPM, 0, 1);
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
+}
+
+/* dscp2prio[i]: priority that dscp i mapped to */
+#define MLX5E_SUPPORTED_DSCP 64
+int mlx5_query_dscp2prio(struct mlx5_core_dev *mdev, u8 *dscp2prio)
+{
+	int sz = MLX5_ST_SZ_BYTES(qpdpm_reg);
+	void *qpdpm_dscp;
+	void *out;
+	void *in;
+	int err;
+	int i;
+
+	in = kzalloc(sz, GFP_KERNEL);
+	out = kzalloc(sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	MLX5_SET(qpdpm_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_QPDPM, 0, 0);
+	if (err)
+		goto out;
+
+	for (i = 0; i < (MLX5E_SUPPORTED_DSCP); i++) {
+		qpdpm_dscp = MLX5_ADDR_OF(qpdpm_reg, out, dscp[i]);
+		dscp2prio[i] = MLX5_GET16(qpdpm_dscp_reg, qpdpm_dscp, prio);
+	}
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
+}
+
+static int is_valid_vf(struct mlx5_core_dev *dev, int vf)
+{
+	struct pci_dev *pdev = dev->pdev;
+
+	if (vf == 1)
+		return 1;
+
+	if (mlx5_core_is_pf(dev))
+		return (vf <= pci_num_vf(pdev)) && (vf >= 1);
+
+	return 0;
+}
+
+int mlx5_core_query_gids(struct mlx5_core_dev *dev, u8 other_vport,
+			 u8 port_num, u16  vf_num, u16 gid_index,
+			 union ib_gid *gid)
+{
+	int in_sz = MLX5_ST_SZ_BYTES(query_hca_vport_gid_in);
+	int out_sz = MLX5_ST_SZ_BYTES(query_hca_vport_gid_out);
+	int is_group_manager;
+	void *out = NULL;
+	void *in = NULL;
+	union ib_gid *tmp;
+	int tbsz;
+	int nout;
+	int err;
+
+	vf_num += 1;
+	if (!is_valid_vf(dev, vf_num)) {
+		mlx5_core_warn(dev, "invalid vf number %d", vf_num);
+		return -EINVAL;
+	}
+
+	is_group_manager = MLX5_CAP_GEN(dev, vport_group_manager);
+	tbsz = mlx5_get_gid_table_len(MLX5_CAP_GEN(dev, gid_table_size));
+	mlx5_core_dbg(dev, "vf_num %d, index %d, gid_table_size %d\n",
+		      vf_num, gid_index, tbsz);
+
+	if (gid_index > tbsz && gid_index != 0xffff)
+		return -EINVAL;
+
+	if (gid_index == 0xffff)
+		nout = tbsz;
+	else
+		nout = 1;
+
+	out_sz += nout * sizeof(*gid);
+
+	in = kzalloc(in_sz, GFP_KERNEL);
+	out = kzalloc(out_sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	MLX5_SET(query_hca_vport_gid_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_VPORT_GID);
+	if (other_vport) {
+		if (is_group_manager) {
+			MLX5_SET(query_hca_vport_gid_in, in, vport_number, vf_num);
+			MLX5_SET(query_hca_vport_gid_in, in, other_vport, 1);
+		} else {
+			err = -EPERM;
+			goto out;
+		}
+	}
+	MLX5_SET(query_hca_vport_gid_in, in, gid_index, gid_index);
+
+	if (MLX5_CAP_GEN(dev, num_ports) == 2)
+		MLX5_SET(query_hca_vport_gid_in, in, port_num, port_num);
+
+	err = mlx5_cmd_exec(dev, in, in_sz, out, out_sz);
+	if (err)
+		goto out;
+
+	tmp = out + MLX5_ST_SZ_BYTES(query_hca_vport_gid_out);
+	gid->global.subnet_prefix = tmp->global.subnet_prefix;
+	gid->global.interface_id = tmp->global.interface_id;
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
+}
+EXPORT_SYMBOL_GPL(mlx5_core_query_gids);
+
+int mlx5_core_query_pkeys(struct mlx5_core_dev *dev, u8 other_vport,
+			  u8 port_num, u16 vf_num, u16 pkey_index,
+			  u16 *pkey)
+{
+	int in_sz = MLX5_ST_SZ_BYTES(query_hca_vport_pkey_in);
+	int out_sz = MLX5_ST_SZ_BYTES(query_hca_vport_pkey_out);
+	int is_group_manager;
+	void *out = NULL;
+	void *in = NULL;
+	void *pkarr;
+	int nout;
+	int tbsz;
+	int err;
+	int i;
+
+	is_group_manager = MLX5_CAP_GEN(dev, vport_group_manager);
+	mlx5_core_dbg(dev, "vf_num %d\n", vf_num);
+
+	vf_num += 1;
+	if (!is_valid_vf(dev, vf_num)) {
+		mlx5_core_warn(dev, "invalid vf number %d", vf_num);
+		return -EINVAL;
+	}
+
+	tbsz = mlx5_to_sw_pkey_sz(MLX5_CAP_GEN(dev, pkey_table_size));
+	if (pkey_index > tbsz && pkey_index != 0xffff)
+		return -EINVAL;
+
+	if (pkey_index == 0xffff)
+		nout = tbsz;
+	else
+		nout = 1;
+
+	out_sz += nout * MLX5_ST_SZ_BYTES(pkey);
+
+	in = kzalloc(in_sz, GFP_KERNEL);
+	out = kzalloc(out_sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	MLX5_SET(query_hca_vport_pkey_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_VPORT_PKEY);
+	if (other_vport) {
+		if (is_group_manager) {
+			MLX5_SET(query_hca_vport_pkey_in, in, vport_number, vf_num);
+			MLX5_SET(query_hca_vport_pkey_in, in, other_vport, 1);
+		} else {
+			err = -EPERM;
+			goto out;
+		}
+	}
+	MLX5_SET(query_hca_vport_pkey_in, in, pkey_index, pkey_index);
+
+	if (MLX5_CAP_GEN(dev, num_ports) == 2)
+		MLX5_SET(query_hca_vport_pkey_in, in, port_num, port_num);
+
+	err = mlx5_cmd_exec(dev, in, in_sz, out, out_sz);
+	if (err)
+		goto out;
+
+	pkarr = out + MLX5_ST_SZ_BYTES(query_hca_vport_pkey_out);
+	for (i = 0; i < nout; i++, pkey++, pkarr += MLX5_ST_SZ_BYTES(pkey))
+		*pkey = MLX5_GET_PR(pkey, pkarr, pkey);
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
+}
+EXPORT_SYMBOL_GPL(mlx5_core_query_pkeys);
+
+int mlx5_core_query_hca_vport_context(struct mlx5_core_dev *dev,
+				      u8 other_vport, u8 port_num,
+				      u16 vf_num,
+				      struct mlx5_hca_vport_context *rep)
+{
+	int out_sz = MLX5_ST_SZ_BYTES(query_hca_vport_context_out);
+	u32 in[MLX5_ST_SZ_DW(query_hca_vport_context_in)];
+	int is_group_manager;
+	void *out;
+	void *ctx;
+	int err;
+
+	mlx5_core_dbg(dev, "vf_num %d\n", vf_num);
+	is_group_manager = MLX5_CAP_GEN(dev, vport_group_manager);
+	vf_num += 1;
+	if (!is_valid_vf(dev, vf_num)) {
+		mlx5_core_warn(dev, "invalid vf number %d", vf_num);
+		return -EINVAL;
+	}
+
+	memset(in, 0, sizeof(in));
+	out = kzalloc(out_sz, GFP_KERNEL);
+	if (!out)
+		return -ENOMEM;
+
+	MLX5_SET(query_hca_vport_context_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_VPORT_CONTEXT);
+
+	if (other_vport) {
+		if (is_group_manager) {
+			MLX5_SET(query_hca_vport_context_in, in, other_vport, 1);
+			MLX5_SET(query_hca_vport_context_in, in, vport_number, vf_num);
+		} else {
+			err = -EPERM;
+			goto ex;
+		}
+	}
+
+	if (MLX5_CAP_GEN(dev, num_ports) == 2)
+		MLX5_SET(query_hca_vport_context_in, in, port_num, port_num);
+
+	err = mlx5_cmd_exec(dev, in, sizeof(in), out,  out_sz);
+	if (err)
+		goto ex;
+
+	ctx = MLX5_ADDR_OF(query_hca_vport_context_out, out, hca_vport_context);
+	rep->field_select = MLX5_GET_PR(hca_vport_context, ctx, field_select);
+	rep->sm_virt_aware = MLX5_GET_PR(hca_vport_context, ctx, sm_virt_aware);
+	rep->has_smi = MLX5_GET_PR(hca_vport_context, ctx, has_smi);
+	rep->has_raw = MLX5_GET_PR(hca_vport_context, ctx, has_raw);
+	rep->policy = MLX5_GET_PR(hca_vport_context, ctx, vport_state_policy);
+	rep->phys_state = MLX5_GET_PR(hca_vport_context, ctx,
+				      port_physical_state);
+	rep->vport_state = MLX5_GET_PR(hca_vport_context, ctx, vport_state);
+	rep->port_physical_state = MLX5_GET_PR(hca_vport_context, ctx,
+					       port_physical_state);
+	rep->port_guid = MLX5_GET64_PR(hca_vport_context, ctx, port_guid);
+	rep->node_guid = MLX5_GET64_PR(hca_vport_context, ctx, node_guid);
+	rep->cap_mask1 = MLX5_GET_PR(hca_vport_context, ctx, cap_mask1);
+	rep->cap_mask1_perm = MLX5_GET_PR(hca_vport_context, ctx,
+					  cap_mask1_field_select);
+	rep->cap_mask2 = MLX5_GET_PR(hca_vport_context, ctx, cap_mask2);
+	rep->cap_mask2_perm = MLX5_GET_PR(hca_vport_context, ctx,
+					  cap_mask2_field_select);
+	rep->lid = MLX5_GET_PR(hca_vport_context, ctx, lid);
+	rep->init_type_reply = MLX5_GET_PR(hca_vport_context, ctx,
+					   init_type_reply);
+	rep->lmc = MLX5_GET_PR(hca_vport_context, ctx, lmc);
+	rep->subnet_timeout = MLX5_GET_PR(hca_vport_context, ctx,
+					  subnet_timeout);
+	rep->sm_lid = MLX5_GET_PR(hca_vport_context, ctx, sm_lid);
+	rep->sm_sl = MLX5_GET_PR(hca_vport_context, ctx, sm_sl);
+	rep->qkey_violation_counter = MLX5_GET_PR(hca_vport_context, ctx,
+						  qkey_violation_counter);
+	rep->pkey_violation_counter = MLX5_GET_PR(hca_vport_context, ctx,
+						  pkey_violation_counter);
+	rep->grh_required = MLX5_GET_PR(hca_vport_context, ctx, grh_required);
+	rep->sys_image_guid = MLX5_GET64_PR(hca_vport_context, ctx,
+					    system_image_guid);
+
+ex:
+	kfree(out);
+	return err;
+}
+EXPORT_SYMBOL_GPL(mlx5_core_query_hca_vport_context);
+
+int mlx5_query_port_pbmc(struct mlx5_core_dev *mdev, void *out)
+{
+	int sz = MLX5_ST_SZ_BYTES(pbmc_reg);
+	void *in;
+	int err;
+
+	in = kzalloc(sz, GFP_KERNEL);
+	if (!in)
+		return -ENOMEM;
+
+	MLX5_SET(pbmc_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PBMC, 0, 0);
+
+	kfree(in);
+	return err;
+}
+
+int mlx5_set_port_pbmc(struct mlx5_core_dev *mdev, void *in)
+{
+	int sz = MLX5_ST_SZ_BYTES(pbmc_reg);
+	void *out;
+	int err;
+
+	out = kzalloc(sz, GFP_KERNEL);
+	if (!out)
+		return -ENOMEM;
+
+	MLX5_SET(pbmc_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PBMC, 0, 1);
+
+	kfree(out);
+	return err;
+}
+
+/* buffer[i]: buffer that priority i mapped to */
+int mlx5_query_port_priority2buffer(struct mlx5_core_dev *mdev, u8 *buffer)
+{
+	int sz = MLX5_ST_SZ_BYTES(pptb_reg);
+	u32 prio_x_buff;
+	void *out;
+	void *in;
+	int prio;
+	int err;
+
+	in = kzalloc(sz, GFP_KERNEL);
+	out = kzalloc(sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	MLX5_SET(pptb_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 0);
+	if (err)
+		goto out;
+
+	prio_x_buff = MLX5_GET(pptb_reg, out, prio_x_buff);
+	for (prio = 0; prio < 8; prio++)
+		buffer[prio] = (u8)(prio_x_buff >> (4 * prio)) & 0xF;
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
+}
+
+int mlx5_set_port_priority2buffer(struct mlx5_core_dev *mdev, u8 *buffer)
+{
+	int sz = MLX5_ST_SZ_BYTES(pptb_reg);
+	void *out;
+	void *in;
+	u32 prio_x_buff;
+	int prio;
+	int err;
+
+	in = kzalloc(sz, GFP_KERNEL);
+	out = kzalloc(sz, GFP_KERNEL);
+	if (!in || !out) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	/* First query the pptb register */
+	MLX5_SET(pptb_reg, in, local_port, 1);
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 0);
+	if (err)
+		goto out;
+
+	memcpy(in, out, sz);
+	MLX5_SET(pptb_reg, in, local_port, 1);
+
+	/* Update the pm and prio_x_buff */
+	MLX5_SET(pptb_reg, in, pm, 0xFF);
+
+	prio_x_buff = 0;
+	for (prio = 0; prio < 8; prio++)
+		prio_x_buff |= (buffer[prio] << (4 * prio));
+	MLX5_SET(pptb_reg, in, prio_x_buff, prio_x_buff);
+
+	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 1);
+
+out:
+	kfree(in);
+	kfree(out);
+	return err;
 }

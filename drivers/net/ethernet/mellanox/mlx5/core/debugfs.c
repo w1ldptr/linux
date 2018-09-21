@@ -33,9 +33,11 @@
 #include <linux/module.h>
 #include <linux/debugfs.h>
 #include <linux/mlx5/qp.h>
+#include <linux/mlx5/qp_exp.h>
 #include <linux/mlx5/cq.h>
 #include <linux/mlx5/driver.h>
 #include "mlx5_core.h"
+#include "vxlan.h"
 
 enum {
 	QP_PID,
@@ -59,6 +61,22 @@ static char *qp_fields[] = {
 	[QP_N_SEND]	= "num_send",
 	[QP_LOG_PG_SZ]	= "log2_page_sz",
 	[QP_RQPN]	= "remote_qpn",
+};
+
+enum {
+	DCT_PID,
+	DCT_STATE,
+	DCT_MTU,
+	DCT_KEY_VIOL,
+	DCT_CQN,
+};
+
+static char *dct_fields[] = {
+	[DCT_PID]	= "pid",
+	[DCT_STATE]	= "state",
+	[DCT_MTU]	= "mtu",
+	[DCT_KEY_VIOL]	= "key_violations",
+	[DCT_CQN]	= "cqn",
 };
 
 enum {
@@ -122,6 +140,26 @@ void mlx5_qp_debugfs_cleanup(struct mlx5_core_dev *dev)
 	debugfs_remove_recursive(dev->priv.qp_debugfs);
 }
 
+int mlx5_dct_debugfs_init(struct mlx5_core_dev *dev)
+{
+	if (!mlx5_debugfs_root)
+		return 0;
+
+	dev->priv.dct_debugfs = debugfs_create_dir("DCTs",  dev->priv.dbg_root);
+	if (!dev->priv.dct_debugfs)
+		return -ENOMEM;
+
+	return 0;
+}
+
+void mlx5_dct_debugfs_cleanup(struct mlx5_core_dev *dev)
+{
+	if (!mlx5_debugfs_root)
+		return;
+
+	debugfs_remove_recursive(dev->priv.dct_debugfs);
+}
+
 int mlx5_eq_debugfs_init(struct mlx5_core_dev *dev)
 {
 	if (!mlx5_debugfs_root)
@@ -140,6 +178,49 @@ void mlx5_eq_debugfs_cleanup(struct mlx5_core_dev *dev)
 		return;
 
 	debugfs_remove_recursive(dev->priv.eq_debugfs);
+}
+
+int mlx5_vxlan_debugfs_init(struct mlx5_core_dev *dev)
+{
+	if (!mlx5_debugfs_root)
+		return 0;
+
+	dev->priv.vxlan_debugfs = debugfs_create_dir("VXLAN",
+						     dev->priv.dbg_root);
+
+	return dev->priv.vxlan_debugfs ? 0 : -ENOMEM;
+}
+
+void mlx5_vxlan_debugfs_cleanup(struct mlx5_core_dev *dev)
+{
+	if (!mlx5_debugfs_root)
+		return;
+
+	debugfs_remove_recursive(dev->priv.vxlan_debugfs);
+}
+
+int mlx5_vxlan_debugfs_add(struct mlx5_core_dev *dev,
+			   struct mlx5e_vxlan *vxlan)
+{
+	char resn[32];
+
+	if (!mlx5_debugfs_root)
+		return 0;
+
+	sprintf(resn, "%d", vxlan->udp_port);
+	vxlan->dbg = debugfs_create_u16(resn, 0400, dev->priv.vxlan_debugfs,
+					&vxlan->udp_port);
+
+	return vxlan->dbg ? 0 : -ENOMEM;
+}
+
+void mlx5_vxlan_debugfs_remove(struct mlx5_core_dev *dev,
+			       struct mlx5e_vxlan *vxlan)
+{
+	if (!mlx5_debugfs_root)
+		return;
+
+	debugfs_remove(vxlan->dbg);
 }
 
 static ssize_t average_read(struct file *filp, char __user *buf, size_t count,
@@ -167,7 +248,6 @@ static ssize_t average_read(struct file *filp, char __user *buf, size_t count,
 	*pos += ret;
 	return ret;
 }
-
 
 static ssize_t average_write(struct file *filp, const char __user *buf,
 			     size_t count, loff_t *pos)
@@ -243,12 +323,13 @@ int mlx5_cmdif_debugfs_init(struct mlx5_core_dev *dev)
 	return 0;
 out:
 	debugfs_remove_recursive(dev->priv.cmdif_debugfs);
+	dev->priv.cmdif_debugfs = NULL;
 	return err;
 }
 
 void mlx5_cmdif_debugfs_cleanup(struct mlx5_core_dev *dev)
 {
-	if (!mlx5_debugfs_root)
+	if (!mlx5_debugfs_root || !dev->priv.cmdif_debugfs)
 		return;
 
 	debugfs_remove_recursive(dev->priv.cmdif_debugfs);
@@ -359,6 +440,51 @@ out:
 	return param;
 }
 
+static u64 dct_read_field(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct,
+			  int index, int *is_str)
+{
+	u32 *out;
+	int outlen =  MLX5_ST_SZ_BYTES(query_dct_out);
+	void *dctc;
+	u64 param = 0;
+	int err;
+
+	out = kzalloc(outlen, GFP_KERNEL);
+	if (!out)
+		return param;
+
+	err = mlx5_core_dct_query(dev, dct, out, outlen);
+	if (err) {
+		mlx5_core_warn(dev, "failed to query dct\n");
+		goto out;
+	}
+
+	dctc = MLX5_ADDR_OF(query_dct_out, out, dct_context_entry);
+	*is_str = 0;
+	switch (index) {
+	case DCT_PID:
+		param = dct->pid;
+		break;
+	case DCT_STATE:
+		param = (u64)mlx5_dct_state_str(MLX5_GET(dctc, dctc, state));
+		*is_str = 1;
+		break;
+	case DCT_MTU:
+		param = MLX5_GET(dctc, dctc, mtu);
+		break;
+	case DCT_KEY_VIOL:
+		param = MLX5_GET(dctc, dctc, dc_access_key_violation_count);
+		break;
+	case DCT_CQN:
+		param = MLX5_GET(dctc, dctc, cqn);
+		break;
+	}
+
+out:
+	kfree(out);
+	return param;
+}
+
 static u64 eq_read_field(struct mlx5_core_dev *dev, struct mlx5_eq *eq,
 			 int index)
 {
@@ -405,7 +531,7 @@ static u64 cq_read_field(struct mlx5_core_dev *dev, struct mlx5_core_cq *cq,
 	u32 *out;
 	int err;
 
-	out = mlx5_vzalloc(outlen);
+	out = kvzalloc(outlen, GFP_KERNEL);
 	if (!out)
 		return param;
 
@@ -461,11 +587,14 @@ static ssize_t dbg_read(struct file *filp, char __user *buf, size_t count,
 		field = cq_read_field(d->dev, d->object, desc->i);
 		break;
 
+	case MLX5_DBG_RSC_DCT:
+		field = dct_read_field(d->dev, d->object, desc->i, &is_str);
+		break;
+
 	default:
 		mlx5_core_warn(d->dev, "invalid resource type %d\n", d->type);
 		return -EINVAL;
 	}
-
 
 	if (is_str)
 		ret = snprintf(tbuf, sizeof(tbuf), "%s\n", (const char *)(unsigned long)field);
@@ -562,6 +691,30 @@ void mlx5_debug_qp_remove(struct mlx5_core_dev *dev, struct mlx5_core_qp *qp)
 		rem_res_tree(qp->dbg);
 }
 
+int mlx5_debug_dct_add(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct)
+{
+	int err;
+
+	if (!mlx5_debugfs_root)
+		return 0;
+
+	err = add_res_tree(dev, MLX5_DBG_RSC_DCT, dev->priv.dct_debugfs,
+			   &dct->dbg, dct->dctn, dct_fields,
+			   ARRAY_SIZE(dct_fields), dct);
+	if (err)
+		dct->dbg = NULL;
+
+	return err;
+}
+
+void mlx5_debug_dct_remove(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct)
+{
+	if (!mlx5_debugfs_root)
+		return;
+
+	if (dct->dbg)
+		rem_res_tree(dct->dbg);
+}
 
 int mlx5_debug_eq_add(struct mlx5_core_dev *dev, struct mlx5_eq *eq)
 {
@@ -611,4 +764,29 @@ void mlx5_debug_cq_remove(struct mlx5_core_dev *dev, struct mlx5_core_cq *cq)
 
 	if (cq->dbg)
 		rem_res_tree(cq->dbg);
+}
+
+void mlx5_offloaded_stats_debugfs_cleanup(struct mlx5_core_dev *dev)
+{
+	debugfs_remove_recursive(dev->priv.dbg_offloaded_stats);
+	dev->priv.dbg_offloaded_stats = NULL;
+}
+
+int mlx5_offloaded_stats_debugfs_init(struct mlx5_core_dev *dev)
+{
+	struct dentry *dbg_root = dev->priv.dbg_root;
+	struct mlx5_priv *priv = &dev->priv;
+
+	dev->offloaded_stats = true;
+
+	if (!mlx5_debugfs_root)
+		return 0;
+
+	priv->dbg_offloaded_stats = debugfs_create_bool("offloaded_stats",
+							0600, dbg_root,
+							&dev->offloaded_stats);
+	if (!priv->dbg_offloaded_stats)
+		return -ENOMEM;
+
+	return 0;
 }

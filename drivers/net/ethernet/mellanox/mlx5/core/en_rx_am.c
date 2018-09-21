@@ -63,7 +63,11 @@ profile[MLX5_CQ_PERIOD_NUM_MODES][MLX5E_PARAMS_AM_NUM_PROFILES] = {
 
 static inline struct mlx5e_cq_moder mlx5e_am_get_profile(u8 cq_period_mode, int ix)
 {
-	return profile[cq_period_mode][ix];
+	struct mlx5e_cq_moder cq_moder;
+
+	cq_moder = profile[cq_period_mode][ix];
+	cq_moder.cq_period_mode = cq_period_mode;
+	return cq_moder;
 }
 
 struct mlx5e_cq_moder mlx5e_am_get_def_profile(u8 rx_cq_period_mode)
@@ -75,34 +79,9 @@ struct mlx5e_cq_moder mlx5e_am_get_def_profile(u8 rx_cq_period_mode)
 	else /* MLX5_CQ_PERIOD_MODE_START_FROM_EQE */
 		default_profile_ix = MLX5E_RX_AM_DEF_PROFILE_EQE;
 
-	return profile[rx_cq_period_mode][default_profile_ix];
+	return mlx5e_am_get_profile(rx_cq_period_mode, default_profile_ix);
 }
 
-/* Adaptive moderation logic */
-enum {
-	MLX5E_AM_START_MEASURE,
-	MLX5E_AM_MEASURE_IN_PROGRESS,
-	MLX5E_AM_APPLY_NEW_PROFILE,
-};
-
-enum {
-	MLX5E_AM_PARKING_ON_TOP,
-	MLX5E_AM_PARKING_TIRED,
-	MLX5E_AM_GOING_RIGHT,
-	MLX5E_AM_GOING_LEFT,
-};
-
-enum {
-	MLX5E_AM_STATS_WORSE,
-	MLX5E_AM_STATS_SAME,
-	MLX5E_AM_STATS_BETTER,
-};
-
-enum {
-	MLX5E_AM_STEPPED,
-	MLX5E_AM_TOO_TIRED,
-	MLX5E_AM_ON_EDGE,
-};
 
 static bool mlx5e_am_on_top(struct mlx5e_rx_am *am)
 {
@@ -183,28 +162,35 @@ static void mlx5e_am_exit_parking(struct mlx5e_rx_am *am)
 	mlx5e_am_step(am);
 }
 
+#define IS_SIGNIFICANT_DIFF(val, ref) \
+	(((100UL * abs((val) - (ref))) / (ref)) > 10) /* more than 10% difference */
+
 static int mlx5e_am_stats_compare(struct mlx5e_rx_am_stats *curr,
 				  struct mlx5e_rx_am_stats *prev)
 {
-	int diff;
+	if (!prev->bpms)
+		return curr->bpms ? MLX5E_AM_STATS_BETTER :
+				    MLX5E_AM_STATS_SAME;
+
+	if (IS_SIGNIFICANT_DIFF(curr->bpms, prev->bpms))
+		return (curr->bpms > prev->bpms) ? MLX5E_AM_STATS_BETTER :
+						   MLX5E_AM_STATS_WORSE;
 
 	if (!prev->ppms)
 		return curr->ppms ? MLX5E_AM_STATS_BETTER :
 				    MLX5E_AM_STATS_SAME;
 
-	diff = curr->ppms - prev->ppms;
-	if (((100 * abs(diff)) / prev->ppms) > 10) /* more than 10% diff */
-		return (diff > 0) ? MLX5E_AM_STATS_BETTER :
-				    MLX5E_AM_STATS_WORSE;
+	if (IS_SIGNIFICANT_DIFF(curr->ppms, prev->ppms))
+		return (curr->ppms > prev->ppms) ? MLX5E_AM_STATS_BETTER :
+						   MLX5E_AM_STATS_WORSE;
 
 	if (!prev->epms)
 		return curr->epms ? MLX5E_AM_STATS_WORSE :
 				    MLX5E_AM_STATS_SAME;
 
-	diff = curr->epms - prev->epms;
-	if (((100 * abs(diff)) / prev->epms) > 10) /* more than 10% diff */
-		return (diff < 0) ? MLX5E_AM_STATS_BETTER :
-				    MLX5E_AM_STATS_WORSE;
+	if (IS_SIGNIFICANT_DIFF(curr->epms, prev->epms))
+		return (curr->epms < prev->epms) ? MLX5E_AM_STATS_BETTER :
+						   MLX5E_AM_STATS_WORSE;
 
 	return MLX5E_AM_STATS_SAME;
 }
@@ -261,15 +247,20 @@ static bool mlx5e_am_decision(struct mlx5e_rx_am_stats *curr_stats,
 	return am->profile_ix != prev_ix;
 }
 
-static void mlx5e_am_sample(struct mlx5e_rq *rq,
+static void mlx5e_am_sample(u16 event_ctr,
+			    u64 packets,
+			    u64 bytes,
 			    struct mlx5e_rx_am_sample *s)
 {
 	s->time	     = ktime_get();
-	s->pkt_ctr   = rq->stats.packets;
-	s->event_ctr = rq->cq.event_ctr;
+	s->pkt_ctr   = packets;
+	s->byte_ctr  = bytes;
+	s->event_ctr = event_ctr;
 }
 
 #define MLX5E_AM_NEVENTS 64
+#define BITS_PER_TYPE(type) (sizeof(type) * BITS_PER_BYTE)
+#define BIT_GAP(bits, end, start) ((((end) - (start)) + BIT_ULL(bits)) & (BIT_ULL(bits) - 1))
 
 static void mlx5e_am_calc_stats(struct mlx5e_rx_am_sample *start,
 				struct mlx5e_rx_am_sample *end,
@@ -277,13 +268,17 @@ static void mlx5e_am_calc_stats(struct mlx5e_rx_am_sample *start,
 {
 	/* u32 holds up to 71 minutes, should be enough */
 	u32 delta_us = ktime_us_delta(end->time, start->time);
-	unsigned int npkts = end->pkt_ctr - start->pkt_ctr;
+	u32 npkts = BIT_GAP(BITS_PER_TYPE(u32), end->pkt_ctr, start->pkt_ctr);
+	u32 nbytes = BIT_GAP(BITS_PER_TYPE(u32), end->byte_ctr,
+			     start->byte_ctr);
 
 	if (!delta_us)
 		return;
 
-	curr_stats->ppms =            (npkts * USEC_PER_MSEC) / delta_us;
-	curr_stats->epms = (MLX5E_AM_NEVENTS * USEC_PER_MSEC) / delta_us;
+	curr_stats->ppms = DIV_ROUND_UP(npkts * USEC_PER_MSEC, delta_us);
+	curr_stats->bpms = DIV_ROUND_UP(nbytes * USEC_PER_MSEC, delta_us);
+	curr_stats->epms = DIV_ROUND_UP(MLX5E_AM_NEVENTS * USEC_PER_MSEC,
+					delta_us);
 }
 
 void mlx5e_rx_am_work(struct work_struct *work)
@@ -293,25 +288,28 @@ void mlx5e_rx_am_work(struct work_struct *work)
 	struct mlx5e_rq *rq = container_of(am, struct mlx5e_rq, am);
 	struct mlx5e_cq_moder cur_profile = profile[am->mode][am->profile_ix];
 
-	mlx5_core_modify_cq_moderation(rq->priv->mdev, &rq->cq.mcq,
+	mlx5_core_modify_cq_moderation(rq->mdev, &rq->cq.mcq,
 				       cur_profile.usec, cur_profile.pkts);
 
 	am->state = MLX5E_AM_START_MEASURE;
 }
 
-void mlx5e_rx_am(struct mlx5e_rq *rq)
+void mlx5e_rx_am(struct mlx5e_rx_am *am,
+		 u16 event_ctr,
+		 u64 packets,
+		 u64 bytes)
 {
-	struct mlx5e_rx_am *am = &rq->am;
 	struct mlx5e_rx_am_sample end_sample;
 	struct mlx5e_rx_am_stats curr_stats;
 	u16 nevents;
 
 	switch (am->state) {
 	case MLX5E_AM_MEASURE_IN_PROGRESS:
-		nevents = rq->cq.event_ctr - am->start_sample.event_ctr;
+		nevents = BIT_GAP(BITS_PER_TYPE(u16), event_ctr,
+				  am->start_sample.event_ctr);
 		if (nevents < MLX5E_AM_NEVENTS)
 			break;
-		mlx5e_am_sample(rq, &end_sample);
+		mlx5e_am_sample(event_ctr, packets, bytes, &end_sample);
 		mlx5e_am_calc_stats(&am->start_sample, &end_sample,
 				    &curr_stats);
 		if (mlx5e_am_decision(&curr_stats, am)) {
@@ -321,7 +319,7 @@ void mlx5e_rx_am(struct mlx5e_rq *rq)
 		}
 		/* fall through */
 	case MLX5E_AM_START_MEASURE:
-		mlx5e_am_sample(rq, &am->start_sample);
+		mlx5e_am_sample(event_ctr, packets, bytes, &am->start_sample);
 		am->state = MLX5E_AM_MEASURE_IN_PROGRESS;
 		break;
 	case MLX5E_AM_APPLY_NEW_PROFILE:
