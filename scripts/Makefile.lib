@@ -137,7 +137,13 @@ __a_flags	=                          $(call flags,_a_flags)
 __cpp_flags     =                          $(call flags,_cpp_flags)
 endif
 
-c_flags        = -Wp,-MD,$(depfile) $(NOSTDINC_FLAGS) $(LINUXINCLUDE)     \
+ifeq ($(COMPILE_FOR_OFED),y)
+ofed-ccflags = -I$(srctree)/mofed/include \
+                        -I$(srctree)/mofed/include/uapi \
+                        -include $(srctree)/mofed/include/linux/compat-2.6.h
+endif
+
+c_flags        = -Wp,-MD,$(depfile) $(NOSTDINC_FLAGS) $(ofed-ccflags) $(LINUXINCLUDE)     \
 		 $(__c_flags) $(modkern_cflags)                           \
 		 -D"KBUILD_STR(s)=\#s" $(basename_flags) $(modname_flags)
 
