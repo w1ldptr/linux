@@ -784,7 +784,7 @@ int mlx5_offloaded_stats_debugfs_init(struct mlx5_core_dev *dev)
 
 	priv->dbg_offloaded_stats = debugfs_create_bool("offloaded_stats",
 							0600, dbg_root,
-							&dev->offloaded_stats);
+							(u32 *)&dev->offloaded_stats);
 	if (!priv->dbg_offloaded_stats)
 		return -ENOMEM;
 
