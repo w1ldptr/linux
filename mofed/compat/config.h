@@ -1877,3 +1877,4 @@
 #define LINUX_BACKPORT(__sym) backport_ ##__sym
 #endif
 
+#define __IPV6_SUPPORT__ 1
