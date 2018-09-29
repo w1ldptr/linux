@@ -1858,7 +1858,6 @@ static int mlx5e_route_lookup_ipv6(struct mlx5e_priv *priv,
 #if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
 	struct net_device *uplink_dev, *uplink_upper_lag_dev;
-	struct mlx5e_rep_priv *uplink_rpriv;
 	bool dst_is_lag_dev;
 	int ret;
 
