@@ -904,9 +904,11 @@ static int tcf_block_cb_call(struct tcf_block *block, enum tc_setup_type type,
 	int ok_count = 0;
 	int err;
 
+#if 0
 	/* Make sure all netdevs sharing this block are offload-capable. */
 	if (block->nooffloaddevcnt && err_stop)
 		return -EOPNOTSUPP;
+#endif
 
 	list_for_each_entry(block_cb, &block->cb_list, list) {
 		err = block_cb->cb(type, type_data, block_cb->cb_priv);
