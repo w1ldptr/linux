@@ -109,6 +109,12 @@ int rtnl_is_locked(void)
 }
 EXPORT_SYMBOL(rtnl_is_locked);
 
+bool refcount_dec_and_rtnl_lock(atomic_t *r)
+{
+	return atomic_dec_and_mutex_lock(r, &rtnl_mutex);
+}
+EXPORT_SYMBOL(refcount_dec_and_rtnl_lock);
+
 #ifdef CONFIG_PROVE_LOCKING
 bool lockdep_rtnl_is_held(void)
 {
