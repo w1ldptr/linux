@@ -35,12 +35,20 @@ struct tcf_block_ext_info {
 	u32 block_index;
 };
 
+enum tcf_block_cb_flags {
+	TCF_BLOCK_CB_DOIT_UNLOCKED = 1,
+};
+
 bool tcf_queue_work(struct rcu_work *rwork, work_func_t func);
 
 #ifdef CONFIG_NET_CLS
 struct tcf_chain *tcf_chain_get_by_act(struct tcf_block *block,
 				       u32 chain_index);
 void tcf_chain_put_by_act(struct tcf_chain *chain);
+struct tcf_chain *tcf_get_next_chain(struct tcf_block *block,
+				     struct tcf_chain *iter);
+struct tcf_proto *tcf_get_next_proto(struct tcf_chain *chain,
+				     struct tcf_proto *iter);
 void tcf_block_netif_keep_dst(struct tcf_block *block);
 int tcf_block_get(struct tcf_block **p_block,
 		  struct tcf_proto __rcu **p_filter_chain, struct Qdisc *q);
@@ -77,10 +85,16 @@ struct tcf_block_cb *__tcf_block_cb_register(struct tcf_block *block,
 int tcf_block_cb_register(struct tcf_block *block,
 			  tc_setup_cb_t *cb, void *cb_ident,
 			  void *cb_priv);
+int tcf_block_cb_register_unlocked(struct tcf_block *block,
+				   tc_setup_cb_unlocked_t *cb,
+				   void *cb_ident, void *cb_priv);
 void __tcf_block_cb_unregister(struct tcf_block *block,
 			       struct tcf_block_cb *block_cb);
 void tcf_block_cb_unregister(struct tcf_block *block,
 			     tc_setup_cb_t *cb, void *cb_ident);
+void tcf_block_cb_unregister_unlocked(struct tcf_block *block,
+				      tc_setup_cb_unlocked_t *cb,
+				      void *cb_ident);
 
 int tcf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 		 struct tcf_result *res, bool compat_mode);
@@ -174,6 +188,14 @@ int tcf_block_cb_register(struct tcf_block *block,
 }
 
 static inline
+int tcf_block_cb_register_unlocked(struct tcf_block *block,
+				   tc_setup_cb_unlocked_t *cb, void *cb_ident,
+				   void *cb_priv)
+{
+	return 0;
+}
+
+static inline
 void __tcf_block_cb_unregister(struct tcf_block *block,
 			       struct tcf_block_cb *block_cb)
 {
@@ -182,6 +204,13 @@ void __tcf_block_cb_unregister(struct tcf_block *block,
 static inline
 void tcf_block_cb_unregister(struct tcf_block *block,
 			     tc_setup_cb_t *cb, void *cb_ident)
+{
+}
+
+static inline
+void tcf_block_cb_unregister_unlocked(struct tcf_block *block,
+				      tc_setup_cb_unlocked_t *cb,
+				      void *cb_ident)
 {
 }
 
@@ -376,7 +405,7 @@ tcf_exts_exec(struct sk_buff *skb, struct tcf_exts *exts,
 
 int tcf_exts_validate(struct net *net, struct tcf_proto *tp,
 		      struct nlattr **tb, struct nlattr *rate_tlv,
-		      struct tcf_exts *exts, bool ovr);
+		      struct tcf_exts *exts, bool ovr, bool rtnl_held);
 void tcf_exts_destroy(struct tcf_exts *exts);
 void tcf_exts_change(struct tcf_exts *dst, struct tcf_exts *src);
 int tcf_exts_dump(struct sk_buff *skb, struct tcf_exts *exts);
@@ -580,8 +609,16 @@ tcf_match_indev(struct sk_buff *skb, int ifindex)
 }
 #endif /* CONFIG_NET_CLS_IND */
 
+enum tc_block_update_offloadcnt {
+	TC_BLOCK_OFFLOADCNT_NOOP,
+	TC_BLOCK_OFFLOADCNT_INC,
+	TC_BLOCK_OFFLOADCNT_DEC,
+};
+
 int tc_setup_cb_call(struct tcf_block *block, struct tcf_exts *exts,
-		     enum tc_setup_type type, void *type_data, bool err_stop);
+		     enum tc_setup_type type, void *type_data, bool err_stop,
+		     bool rtnl_held, u32 *flags, spinlock_t *flags_lock,
+		     enum tc_block_update_offloadcnt update_count);
 
 enum tc_block_command {
 	TC_BLOCK_BIND,
@@ -687,6 +724,11 @@ static inline bool tc_flags_valid(u32 flags)
 static inline bool tc_in_hw(u32 flags)
 {
 	return (flags & TCA_CLS_FLAGS_IN_HW) ? true : false;
+}
+
+static inline bool tc_deleted(u32 flags)
+{
+	return (flags & TCA_CLS_FLAGS_DELETED) ? true : false;
 }
 
 static inline void

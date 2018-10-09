@@ -28,6 +28,7 @@
 #include <linux/if_vlan.h>
 #include <linux/skb_array.h>
 #include <linux/if_macvlan.h>
+#include <linux/mutex.h>
 #include <net/sch_generic.h>
 #include <net/pkt_sched.h>
 #include <net/dst.h>
@@ -916,7 +917,7 @@ struct Qdisc *qdisc_create_dflt(struct netdev_queue *dev_queue,
 	if (!ops->init || ops->init(sch, NULL) == 0)
 		return sch;
 
-	qdisc_destroy(sch);
+	qdisc_put(sch);
 	return NULL;
 }
 EXPORT_SYMBOL(qdisc_create_dflt);
@@ -956,14 +957,17 @@ void qdisc_free(struct Qdisc *qdisc)
 	kfree((char *) qdisc - qdisc->padded);
 }
 
-void qdisc_destroy(struct Qdisc *qdisc)
+void qdisc_free_cb(struct rcu_head *head)
+{
+	struct Qdisc *q = container_of(head, struct Qdisc, rcu);
+
+	qdisc_free(q);
+}
+
+static void qdisc_destroy(struct Qdisc *qdisc)
 {
 	const struct Qdisc_ops  *ops = qdisc->ops;
 	struct sk_buff *skb, *tmp;
-
-	if (qdisc->flags & TCQ_F_BUILTIN ||
-	    !atomic_dec_and_test(&qdisc->refcnt))
-		return;
 
 #ifdef CONFIG_NET_SCHED
 	qdisc_hash_del(qdisc);
@@ -989,9 +993,34 @@ void qdisc_destroy(struct Qdisc *qdisc)
 		kfree_skb_list(skb);
 	}
 
-	qdisc_free(qdisc);
+	call_rcu(&qdisc->rcu, qdisc_free_cb);
 }
-EXPORT_SYMBOL(qdisc_destroy);
+
+void qdisc_put(struct Qdisc *qdisc)
+{
+	if (qdisc->flags & TCQ_F_BUILTIN ||
+	    !atomic_dec_and_test(&qdisc->refcnt))
+		return;
+
+	qdisc_destroy(qdisc);
+}
+EXPORT_SYMBOL(qdisc_put);
+
+/* Version of qdisc_put() that is called with rtnl mutex unlocked.
+ * Intended to be used as optimization, this function only takes rtnl lock if
+ * qdisc reference counter reached zero.
+ */
+
+void qdisc_put_unlocked(struct Qdisc *qdisc)
+{
+	if (qdisc->flags & TCQ_F_BUILTIN ||
+	    !refcount_dec_and_rtnl_lock(&qdisc->refcnt))
+		return;
+
+	qdisc_destroy(qdisc);
+	rtnl_unlock();
+}
+EXPORT_SYMBOL(qdisc_put_unlocked);
 
 /* Attach toplevel qdisc to device queue. */
 struct Qdisc *dev_graft_qdisc(struct netdev_queue *dev_queue,
@@ -1285,7 +1314,7 @@ static void shutdown_scheduler_queue(struct net_device *dev,
 		rcu_assign_pointer(dev_queue->qdisc, qdisc_default);
 		dev_queue->qdisc_sleeping = qdisc_default;
 
-		qdisc_destroy(qdisc);
+		qdisc_put(qdisc);
 	}
 }
 
@@ -1294,7 +1323,7 @@ void dev_shutdown(struct net_device *dev)
 	netdev_for_each_tx_queue(dev, shutdown_scheduler_queue, &noop_qdisc);
 	if (dev_ingress_queue(dev))
 		shutdown_scheduler_queue(dev, dev_ingress_queue(dev), &noop_qdisc);
-	qdisc_destroy(dev->qdisc);
+	qdisc_put(dev->qdisc);
 	dev->qdisc = &noop_qdisc;
 
 	WARN_ON(timer_pending(&dev->watchdog_timer));
@@ -1340,11 +1369,14 @@ static void mini_qdisc_rcu_func(struct rcu_head *head)
 {
 }
 
-void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
-			  struct tcf_proto *tp_head)
+void __mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
+			    struct tcf_proto *tp_head)
 {
-	struct mini_Qdisc *miniq_old = rtnl_dereference(*miniqp->p_miniq);
+	struct mini_Qdisc *miniq_old;
 	struct mini_Qdisc *miniq;
+
+	miniq_old = rcu_dereference_protected(*miniqp->p_miniq,
+					      lockdep_is_held(&miniqp->lock));
 
 	if (!tp_head) {
 		RCU_INIT_POINTER(*miniqp->p_miniq, NULL);
@@ -1371,15 +1403,52 @@ void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
 		 */
 		call_rcu_bh(&miniq_old->rcu, mini_qdisc_rcu_func);
 }
+
+void mini_qdisc_pair_swap_work(struct work_struct *work)
+{
+	struct mini_Qdisc_pair *miniqp = container_of(work,
+						      struct mini_Qdisc_pair,
+						      work);
+	struct tcf_proto *tp_head;
+
+	mutex_lock(&miniqp->lock);
+	tp_head = xchg(&miniqp->tp_head, ERR_PTR(-ENOENT));
+	if (!IS_ERR(tp_head))
+		__mini_qdisc_pair_swap(miniqp, tp_head);
+	mutex_unlock(&miniqp->lock);
+}
+
+void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
+			  struct tcf_proto *tp_head, bool atomic)
+{
+	if (atomic) {
+		xchg(&miniqp->tp_head, tp_head);
+		tc_queue_proto_work(&miniqp->work);
+	} else {
+		mutex_lock(&miniqp->lock);
+		xchg(&miniqp->tp_head, ERR_PTR(-ENOENT));
+		__mini_qdisc_pair_swap(miniqp, tp_head);
+		mutex_unlock(&miniqp->lock);
+	}
+}
 EXPORT_SYMBOL(mini_qdisc_pair_swap);
 
 void mini_qdisc_pair_init(struct mini_Qdisc_pair *miniqp, struct Qdisc *qdisc,
 			  struct mini_Qdisc __rcu **p_miniq)
 {
+	mutex_init(&miniqp->lock);
 	miniqp->miniq1.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq1.cpu_qstats = qdisc->cpu_qstats;
 	miniqp->miniq2.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq2.cpu_qstats = qdisc->cpu_qstats;
 	miniqp->p_miniq = p_miniq;
+	INIT_WORK(&miniqp->work, mini_qdisc_pair_swap_work);
 }
 EXPORT_SYMBOL(mini_qdisc_pair_init);
+
+void mini_qdisc_pair_cleanup(struct mini_Qdisc_pair *miniqp)
+{
+	cancel_work_sync(&miniqp->work);
+	mutex_destroy(&miniqp->lock);
+}
+EXPORT_SYMBOL(mini_qdisc_pair_cleanup);

@@ -315,6 +315,24 @@ out:
 	return q;
 }
 
+struct Qdisc *qdisc_lookup_rcu(struct net_device *dev, u32 handle)
+{
+	struct netdev_queue *nq;
+	struct Qdisc *q;
+
+	if (!handle)
+		return NULL;
+	q = qdisc_match_from_root(dev->qdisc, handle);
+	if (q)
+		goto out;
+
+	nq = dev_ingress_queue_rcu(dev);
+	if (nq)
+		q = qdisc_match_from_root(nq->qdisc_sleeping, handle);
+out:
+	return q;
+}
+
 static struct Qdisc *qdisc_leaf(struct Qdisc *p, u32 classid)
 {
 	unsigned long cl;
@@ -924,7 +942,7 @@ static void notify_and_destroy(struct net *net, struct sk_buff *skb,
 		qdisc_notify(net, skb, n, clid, old, new);
 
 	if (old)
-		qdisc_destroy(old);
+		qdisc_put(old);
 }
 
 /* Graft qdisc "new" to class "classid" of qdisc "parent" or
@@ -974,7 +992,7 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 				qdisc_refcount_inc(new);
 
 			if (!ingress)
-				qdisc_destroy(old);
+				qdisc_put(old);
 		}
 
 skip:
@@ -1502,7 +1520,7 @@ graft:
 	err = qdisc_graft(dev, p, skb, n, clid, q, NULL);
 	if (err) {
 		if (q)
-			qdisc_destroy(q);
+			qdisc_put(q);
 		return err;
 	}
 
@@ -1744,8 +1762,8 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 			   unsigned long new_cl)
 {
 	const struct Qdisc_class_ops *cops = q->ops->cl_ops;
+	struct tcf_chain *chain = NULL;
 	struct tcf_block *block;
-	struct tcf_chain *chain;
 	unsigned long cl;
 
 	cl = cops->find(q, portid);
@@ -1754,17 +1772,17 @@ static void tc_bind_tclass(struct Qdisc *q, u32 portid, u32 clid,
 	block = cops->tcf_block(q, cl);
 	if (!block)
 		return;
-	list_for_each_entry(chain, &block->chain_list, list) {
+	while ((chain = tcf_get_next_chain(block, chain)) != NULL) {
 		struct tcf_proto *tp;
 
-		for (tp = rtnl_dereference(chain->filter_chain);
-		     tp; tp = rtnl_dereference(tp->next)) {
+		for (tp = tcf_get_next_proto(chain, tp);
+		     tp; tp = tcf_get_next_proto(chain, tp)) {
 			struct tcf_bind_args arg = {};
 
 			arg.w.fn = tcf_node_bind;
 			arg.classid = clid;
 			arg.cl = new_cl;
-			tp->ops->walk(tp, &arg.w);
+			tp->ops->walk(tp, &arg.w, true);
 		}
 	}
 }
@@ -2095,14 +2113,14 @@ static int __init pktsched_init(void)
 	register_qdisc(&mq_qdisc_ops);
 	register_qdisc(&noqueue_qdisc_ops);
 
-	rtnl_register(PF_UNSPEC, RTM_NEWQDISC, tc_modify_qdisc, NULL, NULL);
-	rtnl_register(PF_UNSPEC, RTM_DELQDISC, tc_get_qdisc, NULL, NULL);
+	rtnl_register(PF_UNSPEC, RTM_NEWQDISC, tc_modify_qdisc, NULL, 0);
+	rtnl_register(PF_UNSPEC, RTM_DELQDISC, tc_get_qdisc, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_GETQDISC, tc_get_qdisc, tc_dump_qdisc,
-		      NULL);
-	rtnl_register(PF_UNSPEC, RTM_NEWTCLASS, tc_ctl_tclass, NULL, NULL);
-	rtnl_register(PF_UNSPEC, RTM_DELTCLASS, tc_ctl_tclass, NULL, NULL);
+		      0);
+	rtnl_register(PF_UNSPEC, RTM_NEWTCLASS, tc_ctl_tclass, NULL, 0);
+	rtnl_register(PF_UNSPEC, RTM_DELTCLASS, tc_ctl_tclass, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_GETTCLASS, tc_ctl_tclass, tc_dump_tclass,
-		      NULL);
+		      0);
 
 	return 0;
 }

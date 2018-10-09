@@ -26,6 +26,9 @@
 #include <linux/dynamic_queue_limits.h>
 #include <linux/list.h>
 #include <linux/workqueue.h>
+#include <linux/refcount.h>
+#include <linux/atomic.h>
+#include <linux/rwsem.h>
 #include <net/gen_stats.h>
 #include <net/rtnetlink.h>
 
@@ -36,6 +39,9 @@ struct module;
 
 typedef int tc_setup_cb_t(enum tc_setup_type type,
 			  void *type_data, void *cb_priv);
+typedef int tc_setup_cb_unlocked_t(enum tc_setup_type type,
+				   void *type_data, void *cb_priv,
+				   bool rtnl_held);
 
 struct qdisc_rate_table {
 	struct tc_ratespec rate;
@@ -119,6 +125,7 @@ struct Qdisc {
 
 	spinlock_t		busylock ____cacheline_aligned_in_smp;
 	spinlock_t		seqlock;
+	struct rcu_head		rcu;
 };
 
 static inline void qdisc_refcount_inc(struct Qdisc *qdisc)
@@ -126,6 +133,19 @@ static inline void qdisc_refcount_inc(struct Qdisc *qdisc)
 	if (qdisc->flags & TCQ_F_BUILTIN)
 		return;
 	atomic_inc(&qdisc->refcnt);
+}
+
+/* Intended to be used by unlocked users, when concurrent qdisc release is
+ * possible.
+ */
+
+static inline struct Qdisc *qdisc_refcount_inc_nz(struct Qdisc *qdisc)
+{
+	if (qdisc->flags & TCQ_F_BUILTIN)
+		return qdisc;
+	if (atomic_inc_not_zero(&qdisc->refcnt))
+		return qdisc;
+	return NULL;
 }
 
 static inline bool qdisc_is_running(struct Qdisc *qdisc)
@@ -174,6 +194,7 @@ static inline int qdisc_avail_bulklimit(const struct netdev_queue *txq)
 }
 
 struct Qdisc_class_ops {
+	unsigned int		flags;
 	/* Child qdisc manipulation */
 	struct netdev_queue *	(*select_queue)(struct Qdisc *, struct tcmsg *);
 	int			(*graft)(struct Qdisc *, unsigned long cl,
@@ -199,6 +220,13 @@ struct Qdisc_class_ops {
 					struct sk_buff *skb, struct tcmsg*);
 	int			(*dump_stats)(struct Qdisc *, unsigned long,
 					struct gnet_dump *);
+};
+
+/* Qdisc_class_ops flag values */
+
+/* Implements API that doesn't require rtnl lock */
+enum qdisc_class_ops_flags {
+	QDISC_CLASS_OPS_DOIT_UNLOCKED = 1,
 };
 
 struct Qdisc_ops {
@@ -255,16 +283,18 @@ struct tcf_proto_ops {
 					    const struct tcf_proto *,
 					    struct tcf_result *);
 	int			(*init)(struct tcf_proto*);
-	void			(*destroy)(struct tcf_proto*);
+	void			(*destroy)(struct tcf_proto *tp, bool rtnl_held);
 
 	void*			(*get)(struct tcf_proto*, u32 handle);
+	void			(*put)(struct tcf_proto *tp, void *f);
 	int			(*change)(struct net *net, struct sk_buff *,
 					struct tcf_proto*, unsigned long,
 					u32 handle, struct nlattr **,
-					void **, bool);
+					  void **, bool, bool);
 	int			(*delete)(struct tcf_proto *tp, void *arg,
-					  bool *last);
-	void			(*walk)(struct tcf_proto*, struct tcf_walker *arg);
+					  bool *last, bool rtnl_held);
+	void			(*walk)(struct tcf_proto *tp,
+					struct tcf_walker *arg, bool rtnl_held);
 	int			(*reoffload)(struct tcf_proto *tp, bool add,
 					     tc_setup_cb_t *cb, void *cb_priv);
 	void			(*bind_class)(void *, u32, unsigned long);
@@ -275,12 +305,18 @@ struct tcf_proto_ops {
 
 	/* rtnetlink specific */
 	int			(*dump)(struct net*, struct tcf_proto*, void *,
-					struct sk_buff *skb, struct tcmsg*);
+					struct sk_buff *skb, struct tcmsg*,
+					bool);
 	int			(*tmplt_dump)(struct sk_buff *skb,
 					      struct net *net,
 					      void *tmplt_priv);
 
 	struct module		*owner;
+	int			flags;
+};
+
+enum tcf_proto_ops_flags {
+	TCF_PROTO_OPS_DOIT_UNLOCKED = 1,
 };
 
 struct tcf_proto {
@@ -299,7 +335,12 @@ struct tcf_proto {
 	void			*data;
 	const struct tcf_proto_ops	*ops;
 	struct tcf_chain	*chain;
+	/* Lock protects shared state used by unlocked classifiers. */
+	spinlock_t		lock;
+	bool			deleting;
+	refcount_t		refcnt;
 	struct rcu_head		rcu;
+	struct work_struct	work;
 };
 
 struct qdisc_skb_cb {
@@ -310,9 +351,12 @@ struct qdisc_skb_cb {
 	unsigned char		data[QDISC_CB_PRIV_LEN];
 };
 
-typedef void tcf_chain_head_change_t(struct tcf_proto *tp_head, void *priv);
+typedef void tcf_chain_head_change_t(struct tcf_proto *tp_head, void *priv,
+				     bool atomic);
 
 struct tcf_chain {
+	/* Protects filter_chain and filter_chain_list. */
+	spinlock_t filter_chain_lock;
 	struct tcf_proto __rcu *filter_chain;
 	struct list_head list;
 	struct tcf_block *block;
@@ -320,33 +364,69 @@ struct tcf_chain {
 	unsigned int refcnt;
 	unsigned int action_refcnt;
 	bool explicitly_created;
+	bool flushing;
 	const struct tcf_proto_ops *tmplt_ops;
 	void *tmplt_priv;
 };
 
 struct tcf_block {
+	/* Lock protects tcf_block and lifetime-management data of chains
+	 * attached to the block (refcnt, action_refcnt, explicitly_created).
+	 */
+	spinlock_t lock;
 	struct list_head chain_list;
 	u32 index; /* block index for shared blocks */
-	unsigned int refcnt;
+	refcount_t refcnt;
 	struct net *net;
 	struct Qdisc *q;
+	/* protects offloads cb list and counters */
+	struct rw_semaphore offloads_lock;
 	struct list_head cb_list;
 	struct list_head owner_list;
 	bool keep_dst;
-	unsigned int offloadcnt; /* Number of oddloaded filters */
+	atomic_t offloadcnt; /* Number of oddloaded filters */
 	unsigned int nooffloaddevcnt; /* Number of devs unable to do offload */
 	struct {
 		struct tcf_chain *chain;
 		struct list_head filter_chain_list;
 	} chain0;
+	struct rcu_head rcu;
 };
+
+#ifdef CONFIG_PROVE_LOCKING
+static inline bool lockdep_tcf_chain_is_locked(struct tcf_chain *chain)
+{
+	return lockdep_is_held(&chain->filter_chain_lock);
+}
+
+static inline bool lockdep_tcf_proto_is_locked(struct tcf_proto *tp)
+{
+	return lockdep_is_held(&tp->lock);
+}
+#else
+static inline bool lockdep_tcf_chain_is_locked(struct tcf_block *chain)
+{
+	return true;
+}
+
+static inline bool lockdep_tcf_proto_is_locked(struct tcf_proto *tp)
+{
+	return true;
+}
+#endif /* #ifdef CONFIG_PROVE_LOCKING */
+
+#define tcf_chain_dereference(p, chain)					\
+	rcu_dereference_protected(p, lockdep_tcf_chain_is_locked(chain))
+
+#define tcf_proto_dereference(p, tp)					\
+	rcu_dereference_protected(p, lockdep_tcf_proto_is_locked(tp))
 
 static inline void tcf_block_offload_inc(struct tcf_block *block, u32 *flags)
 {
 	if (*flags & TCA_CLS_FLAGS_IN_HW)
 		return;
 	*flags |= TCA_CLS_FLAGS_IN_HW;
-	block->offloadcnt++;
+	atomic_inc(&block->offloadcnt);
 }
 
 static inline void tcf_block_offload_dec(struct tcf_block *block, u32 *flags)
@@ -354,7 +434,7 @@ static inline void tcf_block_offload_dec(struct tcf_block *block, u32 *flags)
 	if (!(*flags & TCA_CLS_FLAGS_IN_HW))
 		return;
 	*flags &= ~TCA_CLS_FLAGS_IN_HW;
-	block->offloadcnt--;
+	atomic_dec(&block->offloadcnt);
 }
 
 static inline void
@@ -371,6 +451,8 @@ tc_cls_offload_cnt_update(struct tcf_block *block, unsigned int *cnt,
 			tcf_block_offload_dec(block, flags);
 	}
 }
+
+bool tc_queue_proto_work(struct work_struct *work);
 
 static inline void qdisc_cb_private_validate(const struct sk_buff *skb, int sz)
 {
@@ -550,7 +632,8 @@ void dev_deactivate_many(struct list_head *head);
 struct Qdisc *dev_graft_qdisc(struct netdev_queue *dev_queue,
 			      struct Qdisc *qdisc);
 void qdisc_reset(struct Qdisc *qdisc);
-void qdisc_destroy(struct Qdisc *qdisc);
+void qdisc_put(struct Qdisc *qdisc);
+void qdisc_put_unlocked(struct Qdisc *qdisc);
 void qdisc_tree_reduce_backlog(struct Qdisc *qdisc, unsigned int n,
 			       unsigned int len);
 struct Qdisc *qdisc_alloc(struct netdev_queue *dev_queue,
@@ -1097,15 +1180,19 @@ static inline void mini_qdisc_qstats_cpu_drop(struct mini_Qdisc *miniq)
 }
 
 struct mini_Qdisc_pair {
+	struct mutex lock; /* protect struct state */
 	struct mini_Qdisc miniq1;
 	struct mini_Qdisc miniq2;
 	struct mini_Qdisc __rcu **p_miniq;
+	struct tcf_proto *tp_head;
+	struct work_struct work;
 };
 
 void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
-			  struct tcf_proto *tp_head);
+			  struct tcf_proto *tp_head, bool atomic);
 void mini_qdisc_pair_init(struct mini_Qdisc_pair *miniqp, struct Qdisc *qdisc,
 			  struct mini_Qdisc __rcu **p_miniq);
+void mini_qdisc_pair_cleanup(struct mini_Qdisc_pair *miniqp);
 
 #endif
 #endif

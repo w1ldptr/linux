@@ -172,6 +172,7 @@ enum {
 #define TCA_CLS_FLAGS_SKIP_SW	(1 << 1) /* don't use filter in SW */
 #define TCA_CLS_FLAGS_IN_HW	(1 << 2) /* filter is offloaded to HW */
 #define TCA_CLS_FLAGS_NOT_IN_HW (1 << 3) /* filter isn't offloaded to HW */
+#define TCA_CLS_FLAGS_DELETED	(1 << 4) /* filter was deleted concurrently */
 
 /* U32 filters */
 
