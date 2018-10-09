@@ -3016,13 +3016,11 @@ static void get_flags(int flags, u8 *flow_flags)
 {
 	u8 __flow_flags = 0;
 
-#if !(defined(HAVE_NDO_SETUP_TC_4_PARAMS) || defined(HAVE_NDO_SETUP_TC_TAKES_CHAIN_INDEX))
 	/* relevant for the new ndo */
 	if (flags & MLX5E_TC_INGRESS)
 		__flow_flags |= MLX5E_TC_FLOW_INGRESS;
 	if (flags & MLX5E_TC_EGRESS)
 		__flow_flags |= MLX5E_TC_FLOW_EGRESS;
-#endif
 
 	*flow_flags = __flow_flags;
 }
