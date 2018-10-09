@@ -87,5 +87,8 @@ mlx_compat-$(CONFIG_XZ_DEC_BCJ) += xz_dec_bcj.o
 mlx_compat-y += mm_util.o
 mlx_compat-y += uuid.o
 mlx_compat-y += rhashtable.o
+mlx_compat-y += exec.o
+mlx_compat-y += pci.o
+mlx_compat-y += rbtree.o
 
 mlx_compat-y += ../block/blk-mq-rdma.o
