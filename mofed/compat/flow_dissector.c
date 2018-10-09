@@ -1,3 +1,5 @@
+#ifdef CONFIG_COMPAT_FLOW_DISSECTOR
+
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
 #include <linux/export.h>
@@ -596,7 +598,7 @@ bool __skb_flow_dissect(const struct sk_buff *skb,
 			 skb->vlan_proto : skb->protocol;
 		nhoff = skb_network_offset(skb);
 		hlen = skb_headlen(skb);
-#if defined(__FLOW_DISSECTOR_BP_DSA_SUPPORT__) && IS_ENABLED(CONFIG_NET_DSA)
+#if IS_ENABLED(CONFIG_NET_DSA)
 		if (unlikely(skb->dev && netdev_uses_dsa(skb->dev))) {
 			const struct dsa_device_ops *ops;
 			int offset;
@@ -1461,3 +1463,5 @@ int init_default_flow_dissectors(void)
 				ARRAY_SIZE(flow_keys_buf_dissector_keys));
 	return 0;
 }
+
+#endif /* CONFIG_COMPAT_FLOW_DISSECTOR */

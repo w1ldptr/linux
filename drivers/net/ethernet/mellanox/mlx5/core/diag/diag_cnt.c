@@ -98,10 +98,7 @@ static ssize_t counter_id_read(struct file *filp, char __user *buf,
 	int i;
 
 	diag_cnt = &dev->diag_cnt;
-	if (*pos)
-		return 0;
-
-	if (!diag_cnt->num_cnt_id)
+	if (*pos || !diag_cnt->num_cnt_id)
 		return -EPERM;
 
 	kbuf = kzalloc(5 * diag_cnt->num_cnt_id + 2, GFP_KERNEL);
@@ -359,10 +356,7 @@ static ssize_t dump_read(struct file *filp, char __user *buf,
 	int err;
 	int len;
 
-	if (*pos)
-		return 0;
-
-	if (!dev->diag_cnt.num_of_samples)
+	if (*pos || !dev->diag_cnt.num_of_samples)
 		return -EPERM;
 
 	err = mlx5_diag_query_counters(dev, &out);

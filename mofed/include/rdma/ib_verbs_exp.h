@@ -359,15 +359,6 @@ struct ib_exp_device_attr {
 	struct ib_exp_umr_fixed_size_caps umr_fixed_size_caps;
 };
 
-struct ib_dm {
-	struct ib_device  *device;
-	phys_addr_t	   dev_addr;
-	u32		   length;
-	u32		   flags;
-	struct ib_uobject *uobject;
-	atomic_t	   usecnt;
-};
-
 enum ib_dct_create_flags {
 	IB_EXP_DCT_OOO_RW_DATA_PLACEMENT	= 1 << 0,
 	IB_DCT_CREATE_FLAGS_MASK		=

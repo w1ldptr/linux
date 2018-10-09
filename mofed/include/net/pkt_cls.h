@@ -59,5 +59,6 @@ static inline bool tc_skip_hw(u32 flags)
 	return (flags & TCA_CLS_FLAGS_SKIP_HW) ? true : false;
 }
 
-#endif	/* _COMPAT_NET_PKT_CLS_H */
 #endif
+
+#endif	/* _COMPAT_NET_PKT_CLS_H */

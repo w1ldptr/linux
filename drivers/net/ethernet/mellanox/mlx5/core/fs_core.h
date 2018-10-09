@@ -37,7 +37,6 @@
 #include <linux/refcount.h>
 #include <linux/mlx5/fs.h>
 #include <linux/rhashtable.h>
-#include <linux/llist.h>
 
 enum fs_node_type {
 	FS_TYPE_NAMESPACE,
@@ -50,6 +49,7 @@ enum fs_node_type {
 
 enum fs_flow_table_type {
 	FS_FT_NIC_RX          = 0x0,
+	FS_FT_NIC_TX          = 0x1,
 	FS_FT_ESW_EGRESS_ACL  = 0x2,
 	FS_FT_ESW_INGRESS_ACL = 0x3,
 	FS_FT_FDB             = 0X4,
@@ -74,10 +74,11 @@ struct mlx5_flow_steering {
 	struct dentry *debugfs;
 	struct mlx5_flow_root_namespace *root_ns;
 	struct mlx5_flow_root_namespace *fdb_root_ns;
-	struct mlx5_flow_root_namespace *esw_egress_root_ns;
-	struct mlx5_flow_root_namespace *esw_ingress_root_ns;
+	struct mlx5_flow_root_namespace **esw_egress_root_ns;
+	struct mlx5_flow_root_namespace **esw_ingress_root_ns;
 	struct mlx5_flow_root_namespace	*sniffer_tx_root_ns;
 	struct mlx5_flow_root_namespace	*sniffer_rx_root_ns;
+	struct mlx5_flow_root_namespace	*egress_root_ns;
 #if (LINUX_VERSION_CODE <= KERNEL_VERSION(3,6,11))
 	char *ftes_cache_name;
 	char *fgs_cache_name;
@@ -143,6 +144,29 @@ struct mlx5_flow_table {
 	struct fs_debugfs_ft		debugfs;
 };
 
+struct mlx5_fc_cache {
+	u64 packets;
+	u64 bytes;
+	u64 lastuse;
+};
+
+struct mlx5_fc {
+	struct rb_node node;
+	struct list_head list;
+
+	/* last{packets,bytes} members are used when calculating the delta since
+	 * last reading
+	 */
+	u64 lastpackets;
+	u64 lastbytes;
+
+	u32 id;
+	bool deleted;
+	bool aging;
+
+	struct mlx5_fc_cache cache ____cacheline_aligned_in_smp;
+};
+
 struct mlx5_ft_underlay_qp {
 	struct list_head list;
 	u32 qpn;
@@ -165,15 +189,8 @@ struct fs_fte {
 	struct fs_node			node;
 	u32				val[MLX5_ST_SZ_DW_MATCH_PARAM];
 	u32				dests_size;
-	u32				flow_tag;
 	u32				index;
-	u32				action;
-	u8				vlan_pcp;
-	u8				vlan_dei;
-	u16				vlan_id;
-	u16				tpid;
-	u32				encap_id;
-	u32				modify_id;
+	struct mlx5_flow_act		action;
 	enum fs_fte_status		status;
 	struct mlx5_fc			*counter;
 	struct rhash_head		hash;
@@ -229,6 +246,7 @@ struct mlx5_flow_root_namespace {
 	/* Should be held when chaining flow tables */
 	struct mutex			chain_lock;
 	struct list_head		underlay_qpns;
+	const struct mlx5_flow_cmds	*cmds;
 };
 
 int mlx5_init_fc_stats(struct mlx5_core_dev *dev);
@@ -240,8 +258,6 @@ void mlx5_fc_queue_stats_work(struct mlx5_core_dev *dev,
 void mlx5_fc_update_sampling_interval(struct mlx5_core_dev *dev,
 				      unsigned long interval);
 #endif
-int mlx5_fc_query(struct mlx5_core_dev *dev, u16 id,
-		  u64 *packets, u64 *bytes);
 
 struct rule_client_data {
 	struct notifier_block *nb;

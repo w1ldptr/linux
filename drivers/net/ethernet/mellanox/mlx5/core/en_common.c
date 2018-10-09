@@ -153,7 +153,7 @@ int mlx5e_refresh_tirs(struct mlx5e_priv *priv, bool enable_uc_lb)
 
 	if (enable_uc_lb)
 		MLX5_SET(modify_tir_in, in, ctx.self_lb_block,
-			 MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST_);
+			 MLX5_TIRC_SELF_LB_BLOCK_BLOCK_UNICAST);
 
 	MLX5_SET(modify_tir_in, in, bitmask.self_lb_en, 1);
 
@@ -271,15 +271,3 @@ int mlx5e_get_max_linkspeed(struct mlx5_core_dev *mdev, u32 *speed)
 }
 #endif
 
-u32 mlx5e_get_link_modes_mask(u32 speed)
-{
-	u32 link_modes = 0;
-	int i;
-
-	for (i = 0; i < MLX5E_LINK_MODES_NUMBER; ++i) {
-		if (mlx5e_link_speed[i] == speed)
-			link_modes |= MLX5E_PROT_MASK(i);
-	}
-
-	return link_modes;
-}

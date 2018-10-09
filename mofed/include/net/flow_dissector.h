@@ -87,12 +87,12 @@
 #define flow_hash_from_keys LINUX_BACKPORT(flow_hash_from_keys)
 #define dissector_uses_key LINUX_BACKPORT(dissector_uses_key)
 #define skb_flow_dissector_target LINUX_BACKPORT(skb_flow_dissector_target)
-#define __skb_flow_dissect LINUX_BACKPORT(__skb_flow_dissect)
 #define init_default_flow_dissectors LINUX_BACKPORT(init_default_flow_dissectors)
 #define skb_flow_dissector_init LINUX_BACKPORT(skb_flow_dissector_init)
 #define skb_get_poff LINUX_BACKPORT(skb_get_poff)
 #define __skb_get_poff LINUX_BACKPORT(__skb_get_poff)
 #define __skb_flow_get_ports LINUX_BACKPORT(__skb_flow_get_ports)
+#define __skb_flow_dissect LINUX_BACKPORT(__skb_flow_dissect)
 #define __skb_get_hash LINUX_BACKPORT(__skb_get_hash)
 #define __get_hash_from_flowi6 LINUX_BACKPORT(__get_hash_from_flowi6)
 #define __get_hash_from_flowi4 LINUX_BACKPORT(__get_hash_from_flowi4)
@@ -379,9 +379,13 @@ static inline void *skb_flow_dissector_target(struct flow_dissector *flow_dissec
 
 #ifndef CONFIG_COMPAT_KERNEL_4_9
 #define skb_flow_dissect_flow_keys LINUX_BACKPORT(skb_flow_dissect_flow_keys)
-#define skb_flow_dissect LINUX_BACKPORT(skb_flow_dissect)
 #define __skb_flow_dissect LINUX_BACKPORT(__skb_flow_dissect)
+#define skb_flow_dissect LINUX_BACKPORT(skb_flow_dissect)
 #define __skb_get_hash_symmetric LINUX_BACKPORT(__skb_get_hash_symmetric)
+
+bool skb_flow_dissect_flow_keys(const struct sk_buff *skb,
+				struct flow_keys *flow,
+				unsigned int flags);
 
 bool __skb_flow_dissect(const struct sk_buff *skb,
 			struct flow_dissector *flow_dissector,
@@ -397,10 +401,6 @@ static inline bool skb_flow_dissect(const struct sk_buff *skb,
 	return __skb_flow_dissect(skb, flow_dissector, target_container,
 				  NULL, 0, 0, 0, flags);
 }
-bool skb_flow_dissect_flow_keys(const struct sk_buff *skb,
-				struct flow_keys *flow,
-				unsigned int flags);
-
 #endif
 
 void skb_flow_dissector_init(struct flow_dissector *flow_dissector,

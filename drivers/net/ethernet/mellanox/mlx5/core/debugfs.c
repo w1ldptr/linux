@@ -463,7 +463,7 @@ static u64 dct_read_field(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct,
 	*is_str = 0;
 	switch (index) {
 	case DCT_PID:
-		param = dct->pid;
+		param = dct->mqp.pid;
 		break;
 	case DCT_STATE:
 		param = (u64)mlx5_dct_state_str(MLX5_GET(dctc, dctc, state));
@@ -625,7 +625,7 @@ static int add_res_tree(struct mlx5_core_dev *dev, enum dbg_rsc_type type,
 	int err;
 	int i;
 
-	d = kzalloc(sizeof(*d) + nfile * sizeof(d->fields[0]), GFP_KERNEL);
+	d = kzalloc(struct_size(d, fields, nfile), GFP_KERNEL);
 	if (!d)
 		return -ENOMEM;
 
@@ -699,10 +699,10 @@ int mlx5_debug_dct_add(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct)
 		return 0;
 
 	err = add_res_tree(dev, MLX5_DBG_RSC_DCT, dev->priv.dct_debugfs,
-			   &dct->dbg, dct->dctn, dct_fields,
+			   &dct->mqp.dbg, dct->mqp.qpn, dct_fields,
 			   ARRAY_SIZE(dct_fields), dct);
 	if (err)
-		dct->dbg = NULL;
+		dct->mqp.dbg = NULL;
 
 	return err;
 }
@@ -712,8 +712,8 @@ void mlx5_debug_dct_remove(struct mlx5_core_dev *dev, struct mlx5_core_dct *dct)
 	if (!mlx5_debugfs_root)
 		return;
 
-	if (dct->dbg)
-		rem_res_tree(dct->dbg);
+	if (dct->mqp.dbg)
+		rem_res_tree(dct->mqp.dbg);
 }
 
 int mlx5_debug_eq_add(struct mlx5_core_dev *dev, struct mlx5_eq *eq)
@@ -764,29 +764,4 @@ void mlx5_debug_cq_remove(struct mlx5_core_dev *dev, struct mlx5_core_cq *cq)
 
 	if (cq->dbg)
 		rem_res_tree(cq->dbg);
-}
-
-void mlx5_offloaded_stats_debugfs_cleanup(struct mlx5_core_dev *dev)
-{
-	debugfs_remove_recursive(dev->priv.dbg_offloaded_stats);
-	dev->priv.dbg_offloaded_stats = NULL;
-}
-
-int mlx5_offloaded_stats_debugfs_init(struct mlx5_core_dev *dev)
-{
-	struct dentry *dbg_root = dev->priv.dbg_root;
-	struct mlx5_priv *priv = &dev->priv;
-
-	dev->offloaded_stats = true;
-
-	if (!mlx5_debugfs_root)
-		return 0;
-
-	priv->dbg_offloaded_stats = debugfs_create_bool("offloaded_stats",
-							0600, dbg_root,
-							(u32 *)&dev->offloaded_stats);
-	if (!priv->dbg_offloaded_stats)
-		return -ENOMEM;
-
-	return 0;
 }

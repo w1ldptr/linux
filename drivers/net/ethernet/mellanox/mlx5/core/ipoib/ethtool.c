@@ -363,7 +363,7 @@ const struct ethtool_ops mlx5i_pkey_ethtool_ops = {
 
 #ifdef HAVE_ETHTOOL_OPS_EXT
 const struct ethtool_ops_ext mlx5i_ethtool_ops_ext = {
-	.size 			= sizeof(struct ethtool_ops_ext),
+	.size			= sizeof(struct ethtool_ops_ext),
 #ifdef HAVE_GET_SET_CHANNELS_EXT
 	.get_channels		= mlx5i_get_channels,
 	.set_channels		= mlx5i_set_channels,
@@ -371,6 +371,6 @@ const struct ethtool_ops_ext mlx5i_ethtool_ops_ext = {
 };
 
 const struct ethtool_ops_ext mlx5i_pkey_ethtool_ops_ext = {
-	.size 			= sizeof(struct ethtool_ops_ext),
+	.size			= sizeof(struct ethtool_ops_ext),
 };
 #endif /* HAVE_ETHTOOL_OPS_EXT */

@@ -58,6 +58,7 @@ struct mlx5_fw_tracer {
 	u8 trc_ver;
 	u8 trace_to_memory;
 	struct work_struct ownership_change_work;
+	struct work_struct read_fw_strings_work;
 
 	/* Strings DB */
 	struct {
@@ -67,6 +68,7 @@ struct mlx5_fw_tracer {
 		u32 base_address_out[8];
 		u32 size_out[8];
 		void *buffer[8];
+		bool loaded;
 	} str_db;
 
 	/* Log Buffer */

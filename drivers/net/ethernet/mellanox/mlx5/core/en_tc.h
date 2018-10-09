@@ -34,6 +34,7 @@
 #define __MLX5_EN_TC_H__
 
 #include <net/pkt_cls.h>
+#include <linux/rhashtable.h>
 
 #define MLX5E_TC_FLOW_ID_MASK 0x0000ffff
 
@@ -45,8 +46,11 @@ enum {
 	MLX5E_TC_LAST_EXPORTED_BIT = 1,
 };
 
-int mlx5e_tc_init(struct mlx5e_priv *priv);
-void mlx5e_tc_cleanup(struct mlx5e_priv *priv);
+int mlx5e_tc_nic_init(struct mlx5e_priv *priv);
+void mlx5e_tc_nic_cleanup(struct mlx5e_priv *priv);
+
+int mlx5e_tc_esw_init(struct rhashtable *tc_ht);
+void mlx5e_tc_esw_cleanup(struct rhashtable *tc_ht);
 
 #ifdef HAVE_TC_FLOWER_OFFLOAD
 int mlx5e_configure_flower(struct mlx5e_priv *priv,
@@ -70,15 +74,12 @@ struct mlx5e_neigh_hash_entry;
 void mlx5e_tc_update_neigh_used_value(struct mlx5e_neigh_hash_entry *nhe);
 #endif
 
-static inline int mlx5e_tc_num_filters(struct mlx5e_priv *priv)
-{
-	return atomic_read(&priv->fs.tc.ht.nelems);
-}
+int mlx5e_tc_num_filters(struct mlx5e_priv *priv);
 #endif /* HAVE_TC_FLOWER_OFFLOAD */
 
 #else /* CONFIG_MLX5_ESWITCH */
-static inline int  mlx5e_tc_init(struct mlx5e_priv *priv) { return 0; }
-static inline void mlx5e_tc_cleanup(struct mlx5e_priv *priv) {}
+static inline int  mlx5e_tc_nic_init(struct mlx5e_priv *priv) { return 0; }
+static inline void mlx5e_tc_nic_cleanup(struct mlx5e_priv *priv) {}
 static inline int  mlx5e_tc_num_filters(struct mlx5e_priv *priv) { return 0; }
 #endif
 

@@ -484,7 +484,8 @@ int mlx5_core_query_ib_ppcnt(struct mlx5_core_dev *dev,
 }
 EXPORT_SYMBOL_GPL(mlx5_core_query_ib_ppcnt);
 
-static int mlx5_query_pfcc_reg(struct mlx5_core_dev *dev, u32 *out, u32 out_size)
+static int mlx5_query_pfcc_reg(struct mlx5_core_dev *dev, u32 *out,
+			       u32 out_size)
 {
 	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
 
@@ -560,6 +561,49 @@ int mlx5_query_port_pfc_prevention(struct mlx5_core_dev *dev,
 	if (pfc_preven_critical)
 		*pfc_preven_critical = MLX5_GET(pfcc_reg, out,
 						device_stall_critical_watermark);
+
+	return 0;
+}
+
+int mlx5_set_port_stall_watermark(struct mlx5_core_dev *dev,
+				  u16 stall_critical_watermark,
+				  u16 stall_minor_watermark)
+{
+	u32 in[MLX5_ST_SZ_DW(pfcc_reg)] = {0};
+	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
+
+	MLX5_SET(pfcc_reg, in, local_port, 1);
+	MLX5_SET(pfcc_reg, in, pptx_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, pprx_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, ppan_mask_n, 1);
+	MLX5_SET(pfcc_reg, in, critical_stall_mask, 1);
+	MLX5_SET(pfcc_reg, in, minor_stall_mask, 1);
+	MLX5_SET(pfcc_reg, in, device_stall_critical_watermark,
+		 stall_critical_watermark);
+	MLX5_SET(pfcc_reg, in, device_stall_minor_watermark, stall_minor_watermark);
+
+	return mlx5_core_access_reg(dev, in, sizeof(in), out,
+				    sizeof(out), MLX5_REG_PFCC, 0, 1);
+}
+
+int mlx5_query_port_stall_watermark(struct mlx5_core_dev *dev,
+				    u16 *stall_critical_watermark,
+				    u16 *stall_minor_watermark)
+{
+	u32 out[MLX5_ST_SZ_DW(pfcc_reg)];
+	int err;
+
+	err = mlx5_query_pfcc_reg(dev, out, sizeof(out));
+	if (err)
+		return err;
+
+	if (stall_critical_watermark)
+		*stall_critical_watermark = MLX5_GET(pfcc_reg, out,
+						     device_stall_critical_watermark);
+
+	if (stall_minor_watermark)
+		*stall_minor_watermark = MLX5_GET(pfcc_reg, out,
+						  device_stall_minor_watermark);
 
 	return 0;
 }
@@ -694,7 +738,7 @@ EXPORT_SYMBOL_GPL(mlx5_query_port_prio_tc);
 static int mlx5_set_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *in,
 				   int inlen)
 {
-	u32 out[MLX5_ST_SZ_DW(qtct_reg)];
+	u32 out[MLX5_ST_SZ_DW(qetc_reg)];
 
 	if (!MLX5_CAP_GEN(mdev, ets))
 		return -EOPNOTSUPP;
@@ -706,7 +750,7 @@ static int mlx5_set_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *in,
 static int mlx5_query_port_qetcr_reg(struct mlx5_core_dev *mdev, u32 *out,
 				     int outlen)
 {
-	u32 in[MLX5_ST_SZ_DW(qtct_reg)];
+	u32 in[MLX5_ST_SZ_DW(qetc_reg)];
 
 	if (!MLX5_CAP_GEN(mdev, ets))
 		return -EOPNOTSUPP;
@@ -1455,110 +1499,3 @@ ex:
 	return err;
 }
 EXPORT_SYMBOL_GPL(mlx5_core_query_hca_vport_context);
-
-int mlx5_query_port_pbmc(struct mlx5_core_dev *mdev, void *out)
-{
-	int sz = MLX5_ST_SZ_BYTES(pbmc_reg);
-	void *in;
-	int err;
-
-	in = kzalloc(sz, GFP_KERNEL);
-	if (!in)
-		return -ENOMEM;
-
-	MLX5_SET(pbmc_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PBMC, 0, 0);
-
-	kfree(in);
-	return err;
-}
-
-int mlx5_set_port_pbmc(struct mlx5_core_dev *mdev, void *in)
-{
-	int sz = MLX5_ST_SZ_BYTES(pbmc_reg);
-	void *out;
-	int err;
-
-	out = kzalloc(sz, GFP_KERNEL);
-	if (!out)
-		return -ENOMEM;
-
-	MLX5_SET(pbmc_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PBMC, 0, 1);
-
-	kfree(out);
-	return err;
-}
-
-/* buffer[i]: buffer that priority i mapped to */
-int mlx5_query_port_priority2buffer(struct mlx5_core_dev *mdev, u8 *buffer)
-{
-	int sz = MLX5_ST_SZ_BYTES(pptb_reg);
-	u32 prio_x_buff;
-	void *out;
-	void *in;
-	int prio;
-	int err;
-
-	in = kzalloc(sz, GFP_KERNEL);
-	out = kzalloc(sz, GFP_KERNEL);
-	if (!in || !out) {
-		err = -ENOMEM;
-		goto out;
-	}
-
-	MLX5_SET(pptb_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 0);
-	if (err)
-		goto out;
-
-	prio_x_buff = MLX5_GET(pptb_reg, out, prio_x_buff);
-	for (prio = 0; prio < 8; prio++)
-		buffer[prio] = (u8)(prio_x_buff >> (4 * prio)) & 0xF;
-
-out:
-	kfree(in);
-	kfree(out);
-	return err;
-}
-
-int mlx5_set_port_priority2buffer(struct mlx5_core_dev *mdev, u8 *buffer)
-{
-	int sz = MLX5_ST_SZ_BYTES(pptb_reg);
-	void *out;
-	void *in;
-	u32 prio_x_buff;
-	int prio;
-	int err;
-
-	in = kzalloc(sz, GFP_KERNEL);
-	out = kzalloc(sz, GFP_KERNEL);
-	if (!in || !out) {
-		err = -ENOMEM;
-		goto out;
-	}
-
-	/* First query the pptb register */
-	MLX5_SET(pptb_reg, in, local_port, 1);
-	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 0);
-	if (err)
-		goto out;
-
-	memcpy(in, out, sz);
-	MLX5_SET(pptb_reg, in, local_port, 1);
-
-	/* Update the pm and prio_x_buff */
-	MLX5_SET(pptb_reg, in, pm, 0xFF);
-
-	prio_x_buff = 0;
-	for (prio = 0; prio < 8; prio++)
-		prio_x_buff |= (buffer[prio] << (4 * prio));
-	MLX5_SET(pptb_reg, in, prio_x_buff, prio_x_buff);
-
-	err = mlx5_core_access_reg(mdev, in, sz, out, sz, MLX5_REG_PPTB, 0, 1);
-
-out:
-	kfree(in);
-	kfree(out);
-	return err;
-}

@@ -56,7 +56,7 @@ enum {
 
 enum {
 	MLX5_NUM_SPARE_EQE	= 0x80,
-	MLX5_NUM_ASYNC_EQE	= 0x100,
+	MLX5_NUM_ASYNC_EQE	= 0x1000,
 	MLX5_NUM_CMD_EQE	= 32,
 	MLX5_NUM_PF_DRAIN	= 64,
 };
@@ -352,24 +352,7 @@ static void eq_pf_process(struct mlx5_eq *eq)
 
 	eq_update_ci(eq, 1);
 }
-#endif /* CONFIG_INFINIBAND_ON_DEMAND_PAGING */
 
-static void dump_eqe(struct mlx5_core_dev *dev, void *eqe)
-{
-	__be32 *buf = eqe;
-	int i;
-
-	mlx5_core_warn(dev, "EQE contents: %08x %08x %08x %08x\n",
-		       be32_to_cpu(buf[0]), be32_to_cpu(buf[1]),
-		       be32_to_cpu(buf[2]), be32_to_cpu(buf[3]));
-	for (i = 4; i < 16; i += 4) {
-		mlx5_core_warn(dev, "              %08x %08x %08x %08x\n",
-			       be32_to_cpu(buf[i]), be32_to_cpu(buf[i + 1]),
-			       be32_to_cpu(buf[i + 2]), be32_to_cpu(buf[i + 3]));
-	}
-}
-
-#ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
 static irqreturn_t mlx5_eq_pf_int(int irq, void *eq_ptr)
 {
 	struct mlx5_eq *eq = eq_ptr;
@@ -412,7 +395,7 @@ static int init_pf_ctx(struct mlx5_eq_pagefault *pf_ctx, const char *name, bool 
 	INIT_WORK(&pf_ctx->work, eq_pf_action);
 
 	pf_ctx->wq = alloc_workqueue(name,
-				     WQ_HIGHPRI | WQ_CPU_INTENSIVE,
+				     WQ_HIGHPRI | WQ_CPU_INTENSIVE | WQ_UNBOUND,
 				     MLX5_NUM_CMD_EQE);
 
 	if (!pf_ctx->wq)
@@ -499,6 +482,20 @@ static void general_event_handler(struct mlx5_core_dev *dev,
 	}
 }
 
+static void mlx5_temp_warning_event(struct mlx5_core_dev *dev,
+				    struct mlx5_eqe *eqe)
+{
+	u64 value_lsb;
+	u64 value_msb;
+
+	value_lsb = be64_to_cpu(eqe->data.temp_warning.sensor_warning_lsb);
+	value_msb = be64_to_cpu(eqe->data.temp_warning.sensor_warning_msb);
+
+	mlx5_core_warn(dev,
+		       "High temperature on sensors with bit set %llx %llx",
+		       value_msb, value_lsb);
+}
+
 /* caller must eventually call mlx5_cq_put on the returned cq */
 static struct mlx5_core_cq *mlx5_eq_cq_get(struct mlx5_eq *eq, u32 cqn)
 {
@@ -519,7 +516,7 @@ static void mlx5_eq_cq_completion(struct mlx5_eq *eq, u32 cqn)
 	struct mlx5_core_cq *cq = mlx5_eq_cq_get(eq, cqn);
 
 	if (unlikely(!cq)) {
-		mlx5_core_warn(eq->dev, "Completion event for bogus CQ 0x%x\n", cqn);
+		mlx5_core_dbg(eq->dev, "Completion event for bogus CQ 0x%x\n", cqn);
 		return;
 	}
 
@@ -544,25 +541,6 @@ static void mlx5_eq_cq_event(struct mlx5_eq *eq, u32 cqn, int event_type)
 	mlx5_cq_put(cq);
 }
 
-static void mlx5_temp_warning_event(struct mlx5_core_dev *dev,
-				    struct mlx5_eqe *eqe)
-{
-	unsigned int bit;
-	u64 value;
-
-	value = be64_to_cpu(eqe->data.temp_warning.sensor_warning_lsb);
-	for (bit = 0; bit < 64; bit++)
-		if ((value >> bit) & 1)
-			mlx5_core_warn(dev, "High temperature on sensor %u",
-				       bit);
-
-	value = be64_to_cpu(eqe->data.temp_warning.sensor_warning_msb);
-	for (bit = 0; bit < 64; bit++)
-		if ((value >> bit) & 1)
-			mlx5_core_warn(dev, "High temperature on sensor %u",
-				       bit + 64);
-}
-
 static irqreturn_t mlx5_eq_int(int irq, void *eq_ptr)
 {
 	struct mlx5_eq *eq = eq_ptr;
@@ -570,8 +548,6 @@ static irqreturn_t mlx5_eq_int(int irq, void *eq_ptr)
 	struct mlx5_eqe *eqe;
 	int set_ci = 0;
 	u32 cqn = -1;
-	int err;
-	u32 dctn;
 	u32 rsn;
 	u8 port;
 
@@ -593,17 +569,12 @@ static irqreturn_t mlx5_eq_int(int irq, void *eq_ptr)
 			cqn = be32_to_cpu(eqe->data.comp.cqn) & 0xffffff;
 			mlx5_eq_cq_completion(eq, cqn);
 			break;
-
 		case MLX5_EVENT_TYPE_DCT_DRAINED:
 		case MLX5_EVENT_TYPE_DCT_KEY_VIOLATION:
-			dctn = be32_to_cpu(eqe->data.dct.dctn) & 0xffffff;
-			err = mlx5_rsc_event(dev, dctn, eqe->type);
-			if (err) {
-				mlx5_core_warn(dev, "mlx5_rsc_event failed on eq 0x%x\n", eq->eqn);
-				dump_eqe(dev, eqe);
-			}
+			rsn = be32_to_cpu(eqe->data.dct.dctn) & 0xffffff;
+			rsn |= (MLX5_RES_DCT << MLX5_USER_INDEX_LEN);
+			mlx5_rsc_event(dev, rsn, eqe->type);
 			break;
-
 		case MLX5_EVENT_TYPE_PATH_MIG:
 		case MLX5_EVENT_TYPE_COMM_EST:
 		case MLX5_EVENT_TYPE_SQ_DRAINED:
@@ -648,7 +619,7 @@ static irqreturn_t mlx5_eq_int(int irq, void *eq_ptr)
 			break;
 
 		case MLX5_EVENT_TYPE_CMD:
-			mlx5_cmd_comp_handler(dev, be32_to_cpu(eqe->data.cmd.vector), MLX5_CMD_COMP_TYPE_EVENT);
+			mlx5_cmd_comp_handler(dev, be32_to_cpu(eqe->data.cmd.vector), false);
 			break;
 
 		case MLX5_EVENT_TYPE_PORT_CHANGE:
@@ -1015,10 +986,11 @@ int mlx5_start_eqs(struct mlx5_core_dev *dev)
 	if (MLX5_CAP_GEN(dev, nvmf_target_offload))
 		async_event_mask |= (1ull << MLX5_EVENT_TYPE_XRQ_ERROR);
 
+	if (MLX5_CAP_GEN_MAX(dev, dct))
+		async_event_mask |= (1ull << MLX5_EVENT_TYPE_DCT_DRAINED);
+
 	if (MLX5_CAP_GEN(dev, temp_warn_event))
 		async_event_mask |= (1ull << MLX5_EVENT_TYPE_TEMP_WARN_EVENT);
-	else
-		mlx5_core_dbg(dev, "temp_warn_event is not set\n");
 
 	if (MLX5_CAP_MCAM_REG(dev, tracer_registers))
 		async_event_mask |= (1ull << MLX5_EVENT_TYPE_DEVICE_TRACER);
@@ -1129,7 +1101,7 @@ void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev)
 {
 	struct mlx5_eq_table *table = &dev->priv.eq_table;
 	struct mlx5_eq *eq;
-	
+
 #ifdef CONFIG_RFS_ACCEL
 	if (dev->rmap) {
 		free_irq_cpu_rmap(dev->rmap);

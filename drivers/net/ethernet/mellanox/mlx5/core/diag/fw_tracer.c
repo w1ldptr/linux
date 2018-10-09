@@ -273,8 +273,11 @@ free_strings_db:
 	return -ENOMEM;
 }
 
-static int mlx5_tracer_read_strings_db(struct mlx5_fw_tracer *tracer)
+static void mlx5_tracer_read_strings_db(struct work_struct *work)
 {
+	struct mlx5_fw_tracer *tracer =
+				container_of(work, struct mlx5_fw_tracer,
+					     read_fw_strings_work);
 	struct mlx5_core_dev *dev = tracer->dev;
 	u32 num_of_reads, num_string_db = tracer->str_db.num_string_db;
 	u32 in[MLX5_ST_SZ_DW(mtrc_cap)] = {0};
@@ -340,10 +343,12 @@ static int mlx5_tracer_read_strings_db(struct mlx5_fw_tracer *tracer)
 
 	}
 
+	tracer->str_db.loaded = true;
+
 out_free:
 	kfree(out);
 out:
-	return err;
+	return;
 }
 
 static void mlx5_tracer_arm_event(struct mlx5_core_dev *dev)
@@ -867,6 +872,7 @@ int mlx5_fw_tracer_init(struct mlx5_core_dev *dev)
 	INIT_WORK(&tracer->ownership_change_work,
 		  mlx5_fw_tracer_ownership_change);
 	INIT_WORK(&dev->tracer->handle_traces_work, mlx5_tracer_handle_traces);
+	INIT_WORK(&tracer->read_fw_strings_work, mlx5_tracer_read_strings_db);
 
 	err = mlx5_query_mtrc_caps(tracer);
 	if (err) {
@@ -889,18 +895,11 @@ int mlx5_fw_tracer_init(struct mlx5_core_dev *dev)
 		goto free_log_buf;
 	}
 
-	err = mlx5_tracer_read_strings_db(tracer);
-	if (err) {
-		mlx5_core_warn(dev, "FWTracer: Read strings DB failed %d\n", err);
-		goto free_string_db;
-	}
-
+	schedule_work(&tracer->read_fw_strings_work);
 	schedule_work(&tracer->ownership_change_work);
 
 	return 0;
 
-free_string_db:
-	mlx5_fw_tracer_free_strings_db(tracer);
 free_log_buf:
 	mlx5_fw_tracer_destroy_log_buf(tracer);
 free_tracer:
@@ -916,6 +915,7 @@ void mlx5_fw_tracer_cleanup(struct mlx5_core_dev *dev)
 		return;
 
 	cancel_work_sync(&tracer->ownership_change_work);
+	cancel_work_sync(&tracer->read_fw_strings_work);
 	cancel_work_sync(&tracer->handle_traces_work);
 
 	if (tracer->owner)
@@ -928,16 +928,19 @@ void mlx5_fw_tracer_cleanup(struct mlx5_core_dev *dev)
 
 void mlx5_fw_tracer_event(struct mlx5_core_dev *dev, struct mlx5_eqe *eqe)
 {
-	if (!dev->tracer)
+	struct mlx5_fw_tracer *tracer = dev->tracer;
+
+	if (!tracer)
 		return;
 
 	switch (eqe->sub_type) {
 	case MLX5_TRACER_SUBTYPE_OWNERSHIP_CHANGE:
 		if (test_bit(MLX5_INTERFACE_STATE_UP, &dev->intf_state))
-			schedule_work(&dev->tracer->ownership_change_work);
+			schedule_work(&tracer->ownership_change_work);
 		break;
 	case MLX5_TRACER_SUBTYPE_TRACES_AVAILABLE:
-		schedule_work(&dev->tracer->handle_traces_work);
+		if (likely(tracer->str_db.loaded))
+			schedule_work(&tracer->handle_traces_work);
 		break;
 	default:
 		mlx5_core_dbg(dev, "FWTracer: Event with unrecognized subtype: sub_type %d\n",

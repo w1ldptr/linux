@@ -26,8 +26,7 @@
 #undef CONFIG_COMPAT_TCF_VLAN_MOD
 #endif
 
-#if defined(CONFIG_COMPAT_RHEL_7_4) || defined(CONFIG_COMPAT_RHEL_7_5) || \
-defined(CONFIG_COMPAT_KERNEL_4_9)
+#if defined(CONFIG_COMPAT_RHEL_7_4) || defined(CONFIG_COMPAT_RHEL_7_5)
 #define CONFIG_COMPAT_RHLTABLE
 #endif
 

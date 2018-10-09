@@ -61,7 +61,9 @@
 #include "eswitch.h"
 #include "lib/mlx5.h"
 #include "fpga/core.h"
+#include "fpga/ipsec.h"
 #include "accel/ipsec.h"
+#include "accel/tls.h"
 #include "lib/clock.h"
 #include "icmd.h"
 #include "diag/fw_tracer.h"
@@ -73,9 +75,6 @@
 MODULE_AUTHOR("Eli Cohen <eli@mellanox.com>");
 MODULE_DESCRIPTION("Mellanox Connect-IB, ConnectX-4, ConnectX-5 core driver");
 MODULE_LICENSE("Dual BSD/GPL");
-#ifdef RETPOLINE_MLNX
-MODULE_INFO(retpoline, "Y");
-#endif
 MODULE_VERSION(DRIVER_VERSION);
 
 unsigned int mlx5_core_debug_mask;
@@ -410,17 +409,23 @@ static int mlx5_alloc_irq_vectors(struct mlx5_core_dev *dev)
 {
 	struct mlx5_priv *priv = &dev->priv;
 	struct mlx5_eq_table *table = &priv->eq_table;
-	int num_eqs = 1 << MLX5_CAP_GEN(dev, log_max_eq);
+	int max_num_eq = MLX5_CAP_GEN(dev, max_num_eqs);
+	int num_eqs;
 	int nvec;
 	int err;
 #ifndef HAVE_PCI_IRQ_API
 	int i;
 #endif
 
-	/* This adjustment is a stop gap until a PRM method is defined */
-	num_eqs = num_eqs - MLX5_FW_RESERVED_EQS;
-	if (num_eqs <= 0)
-		return -ENOMEM;
+	if (max_num_eq) {
+		num_eqs = max_num_eq;
+	} else {
+		num_eqs = 1 << MLX5_CAP_GEN(dev, log_max_eq);
+		num_eqs -= MLX5_FW_RESERVED_EQS;
+		if (num_eqs <= 0)
+			return -ENOMEM;
+	}
+
 	nvec = MLX5_CAP_GEN(dev, num_ports) * num_online_cpus() +
 	       MLX5_EQ_VEC_COMP_BASE;
 	nvec = min_t(int, nvec, num_eqs);
@@ -782,6 +787,15 @@ static int handle_hca_cap(struct mlx5_core_dev *dev)
 			 set_hca_cap,
 			 cache_line_128byte,
 			 cache_line_size() >= 128 ? 1 : 0);
+
+	if (MLX5_CAP_GEN_MAX(dev, dct))
+		MLX5_SET(cmd_hca_cap, set_hca_cap, dct, 1);
+
+	if (MLX5_CAP_GEN_MAX(dev, num_vhca_ports))
+		MLX5_SET(cmd_hca_cap,
+			 set_hca_cap,
+			 num_vhca_ports,
+			 MLX5_CAP_GEN_MAX(dev, num_vhca_ports));
 
 	err = set_caps(dev, set_ctx, set_sz,
 		       MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE);
@@ -1296,11 +1310,6 @@ static int mlx5_init_once(struct mlx5_core_dev *dev, struct mlx5_priv *priv)
 		goto err_sriov_cleanup;
 	}
 
-	err = mlx5_offloaded_stats_debugfs_init(dev);
-	if (err)
-		dev_warn(&pdev->dev,
-			 "Failed to init offloaded stats debugfs %d\n", err);
-
 	return 0;
 
 err_sriov_cleanup:
@@ -1343,7 +1352,6 @@ static void mlx5_cleanup_once(struct mlx5_core_dev *dev)
 	mlx5_cleanup_qp_table(dev);
 	mlx5_cq_debugfs_cleanup(dev);
 	mlx5_eq_cleanup(dev);
-	mlx5_offloaded_stats_debugfs_cleanup(dev);
 }
 
 static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
@@ -1362,8 +1370,9 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
 	dev_info(&pdev->dev, "firmware version: %d.%d.%d\n", fw_rev_maj(dev),
 		 fw_rev_min(dev), fw_rev_sub(dev));
 
+	/* Only PFs hold the relevant PCIe information for this query */
 	if (mlx5_core_is_pf(dev))
-		mlx5_pcie_print_link_status(dev);
+		pcie_print_link_status(dev->pdev);
 
 	/* on load removing any previous indication of internal error, device is
 	 * up
@@ -1444,16 +1453,16 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
 		goto reclaim_boot_pages;
 	}
 
+#ifdef HAVE_PNV_PCI_AS_NOTIFY
+	/* Treat as_notify as best effort feature */
+	mlx5_as_notify_init(dev);
+#endif
+
 	err = mlx5_pagealloc_start(dev);
 	if (err) {
 		dev_err(&pdev->dev, "mlx5_pagealloc_start failed\n");
 		goto reclaim_boot_pages;
 	}
-
-#ifdef HAVE_PNV_PCI_AS_NOTIFY
-	/* Treat as_notify as best effort feature */
-	mlx5_as_notify_init(dev);
-#endif
 
 	err = mlx5_cmd_init_hca(dev, sw_owner_id);
 	if (err) {
@@ -1510,6 +1519,32 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
 		goto err_affinity_hints;
 	}
 
+	err = mlx5_fpga_device_start(dev);
+	if (err) {
+		dev_err(&pdev->dev, "fpga device start failed %d\n", err);
+		goto err_fpga_start;
+	}
+
+	err = mlx5_accel_ipsec_init(dev);
+	if (err) {
+		dev_err(&pdev->dev, "IPSec device start failed %d\n", err);
+		goto err_ipsec_start;
+	}
+
+	err = mlx5_fw_tracer_init(dev);
+	if (err) {
+		dev_err(&pdev->dev, "Failed to init tracer %d\n", err);
+		goto err_tracer_init;
+	}
+
+#ifdef HAVE_UAPI_LINUX_TLS_H
+	err = mlx5_accel_tls_init(dev);
+	if (err) {
+		dev_err(&pdev->dev, "TLS device start failed %d\n", err);
+		goto err_tls_start;
+	}
+#endif
+
 	err = mlx5_init_fs(dev);
 	if (err) {
 		dev_err(&pdev->dev, "Failed to init flow steering\n");
@@ -1526,23 +1561,6 @@ static int mlx5_load_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
 	if (err) {
 		dev_err(&pdev->dev, "sriov init failed %d\n", err);
 		goto err_sriov;
-	}
-
-	err = mlx5_fpga_device_start(dev);
-	if (err) {
-		dev_err(&pdev->dev, "fpga device start failed %d\n", err);
-		goto err_fpga_start;
-	}
-	err = mlx5_accel_ipsec_init(dev);
-	if (err) {
-		dev_err(&pdev->dev, "IPSec device start failed %d\n", err);
-		goto err_ipsec_start;
-	}
-
-	err = mlx5_fw_tracer_init(dev);
-	if (err) {
-		dev_err(&pdev->dev, "Failed to init tracer %d\n", err);
-		goto err_tracer_init;
 	}
 
 	mlx5_diag_cnt_init(dev);
@@ -1567,17 +1585,23 @@ err_reg_dev:
 	mlx5_fw_tracer_cleanup(dev);
 	mlx5_diag_cnt_cleanup(dev);
 err_tracer_init:
-	mlx5_accel_ipsec_cleanup(dev);
-err_ipsec_start:
-	mlx5_fpga_device_stop(dev);
-
-err_fpga_start:
 	mlx5_sriov_detach(dev);
 
 err_sriov:
 	mlx5_cleanup_fs(dev);
 
 err_fs:
+#ifdef HAVE_UAPI_LINUX_TLS_H
+	mlx5_accel_tls_cleanup(dev);
+
+err_tls_start:
+#endif
+	mlx5_accel_ipsec_cleanup(dev);
+
+err_ipsec_start:
+	mlx5_fpga_device_stop(dev);
+
+err_fpga_start:
 	mlx5_irq_clear_affinity_hints(dev);
 
 err_affinity_hints:
@@ -1648,11 +1672,13 @@ static int mlx5_unload_one(struct mlx5_core_dev *dev, struct mlx5_priv *priv,
 		mlx5_detach_device(dev);
 
 	mlx5_diag_cnt_cleanup(dev);
-	mlx5_accel_ipsec_cleanup(dev);
-	mlx5_fpga_device_stop(dev);
-
 	mlx5_sriov_detach(dev);
 	mlx5_cleanup_fs(dev);
+	mlx5_accel_ipsec_cleanup(dev);
+#ifdef HAVE_UAPI_LINUX_TLS_H
+	mlx5_accel_tls_cleanup(dev);
+#endif
+	mlx5_fpga_device_stop(dev);
 	mlx5_irq_clear_affinity_hints(dev);
 	free_comp_eqs(dev);
 	mlx5_stop_eqs(dev);
@@ -2005,7 +2031,9 @@ static void capi_cleanup(struct mlx5_core_dev *dev)
 #ifdef HAVE_PNV_PCI_AS_NOTIFY
 static void mlx5_as_notify_init(struct mlx5_core_dev *dev)
 {
+#ifdef HAVE_PNV_PCI_AS_NOTIFY
 	struct pci_dev *pdev = dev->pdev;
+#endif
 	u32 log_response_bar_size;
 	u64 response_bar_address;
 	u64 asn_match_value;
@@ -2018,20 +2046,23 @@ static void mlx5_as_notify_init(struct mlx5_core_dev *dev)
 	    !MLX5_CAP_GEN(dev, as_notify))
 		return;
 
+#ifdef HAVE_PNV_PCI_AS_NOTIFY
 	err = pnv_pci_enable_tunnel(pdev, &asn_match_value);
+#endif
 	if (err)
 		return;
 	err = set_tunneled_operation(dev, 0xFFFF, asn_match_value, &log_response_bar_size, &response_bar_address);
 	if (err)
 		return;
 
+#ifdef HAVE_PNV_PCI_AS_NOTIFY
 	if (!MLX5_CAP_GEN(dev, as_notify))
 		return;
 
 	err = pnv_pci_set_tunnel_bar(pdev, response_bar_address, 1);
 	if (err)
 		return;
-
+#endif
 	dev->as_notify.response_bar_address = response_bar_address;
 	dev->as_notify.enabled = true;
 	mlx5_core_dbg(dev,
@@ -2077,7 +2108,6 @@ static int init_one(struct pci_dev *pdev,
 	spin_lock_init(&priv->ctx_lock);
 	mutex_init(&dev->pci_status_mutex);
 	mutex_init(&dev->intf_state_mutex);
-	spin_lock_init(&priv->memic_lock);
 
 	INIT_LIST_HEAD(&priv->waiting_events_list);
 	priv->is_accum_events = false;
@@ -2535,11 +2565,12 @@ static int __init init(void)
 	get_random_bytes(&sw_owner_id, sizeof(sw_owner_id));
 
 	mlx5_core_verify_params();
+	mlx5_fpga_ipsec_build_fs_cmds();
 	mlx5_register_debugfs();
 	err = mlx5_create_core_dir();
 	if (err)
 		goto err_debug;
-
+ 
 	err = pci_register_driver(&mlx5_core_driver);
 	if (err)
 		goto err_core_dir;

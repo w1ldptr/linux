@@ -39,6 +39,7 @@
 #include <linux/if_link.h>
 #include <linux/firmware.h>
 #include <linux/mlx5/cq.h>
+#include <linux/mlx5/fs.h>
 
 #define DRIVER_NAME "mlx5_core"
 #define DRIVER_VERSION "5.0-0"
@@ -51,6 +52,11 @@ extern uint mlx5_core_debug_mask;
 	dev_dbg(&(__dev)->pdev->dev, "%s:%d:(pid %d): " format,		\
 		 __func__, __LINE__, current->pid,			\
 		 ##__VA_ARGS__)
+
+#define mlx5_core_dbg_once(__dev, format, ...)				\
+	dev_dbg_once(&(__dev)->pdev->dev, "%s:%d:(pid %d): " format,	\
+		     __func__, __LINE__, current->pid,			\
+		     ##__VA_ARGS__)
 
 #define mlx5_core_dbg_mask(__dev, mask, format, ...)			\
 do {									\
@@ -232,11 +238,13 @@ void mlx5_stop_eqs(struct mlx5_core_dev *dev);
 #ifndef HAVE_PCI_IRQ_API
 u32 mlx5_get_msix_vec(struct mlx5_core_dev *dev, int vecidx);
 #endif
+/* This function should only be called after mlx5_cmd_force_teardown_hca */
+void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev);
 struct mlx5_eq *mlx5_eqn2eq(struct mlx5_core_dev *dev, int eqn);
 int mlx5_vector2eq(struct mlx5_core_dev *dev, int vector, struct mlx5_eq *eqc);
 u32 mlx5_eq_poll_irq_disabled(struct mlx5_eq *eq);
 void mlx5_cq_tasklet_cb(unsigned long data);
-void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, enum mlx5_comp_t comp_type);
+void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool forced);
 int mlx5_debug_eq_add(struct mlx5_core_dev *dev, struct mlx5_eq *eq);
 void mlx5_debug_eq_remove(struct mlx5_core_dev *dev, struct mlx5_eq *eq);
 int mlx5_eq_debugfs_init(struct mlx5_core_dev *dev);
@@ -271,17 +279,6 @@ struct mlx5_core_dev *mlx5_get_next_phys_dev(struct mlx5_core_dev *dev);
 void mlx5_dev_list_lock(void);
 void mlx5_dev_list_unlock(void);
 int mlx5_dev_list_trylock(void);
-int mlx5_encap_alloc(struct mlx5_core_dev *dev,
-		     int header_type,
-		     size_t size,
-		     void *encap_header,
-		     u32 *encap_id);
-void mlx5_encap_dealloc(struct mlx5_core_dev *dev, u32 encap_id);
-
-int mlx5_modify_header_alloc(struct mlx5_core_dev *dev,
-			     u8 namespace, u8 num_actions,
-			     void *modify_actions, u32 *modify_header_id);
-void mlx5_modify_header_dealloc(struct mlx5_core_dev *dev, u32 modify_header_id);
 
 bool mlx5_lag_intf_add(struct mlx5_interface *intf, struct mlx5_priv *priv);
 
@@ -373,16 +370,10 @@ void mlx5_lag_update(struct mlx5_core_dev *dev);
 struct mlx5_core_dev *mlx5_lag_get_peer_mdev(struct mlx5_core_dev *dev);
 struct net_device *mlx5_lag_get_peer_netdev(struct mlx5_core_dev *dev);
 
+void mlx5_reload_interface(struct mlx5_core_dev *mdev, int protocol);
 void mlx5_pcie_print_link_status(struct mlx5_core_dev *dev);
-
 int set_tunneled_operation(struct mlx5_core_dev *mdev,
 			   u16 asn_match_mask, u16 asn_match_value,
 			   u32 *log_response_bar_size,
 			   u64 *response_bar_address);
-
-/* This function should only be called after mlx5_cmd_force_teardown_hca */
-void mlx5_core_eq_free_irqs(struct mlx5_core_dev *dev);
-
-int mlx5_offloaded_stats_debugfs_init(struct mlx5_core_dev *dev);
-void mlx5_offloaded_stats_debugfs_cleanup(struct mlx5_core_dev *dev);
 #endif /* __MLX5_CORE_H__ */

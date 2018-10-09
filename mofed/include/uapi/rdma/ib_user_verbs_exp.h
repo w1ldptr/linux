@@ -564,23 +564,6 @@ struct ib_uverbs_exp_free_dm {
 	__u32 reserved;
 };
 
-struct ib_uverbs_exp_flow_tunnel_filter {
-	__be32 tunnel_id;
-};
-
-struct ib_uverbs_exp_flow_spec_tunnel {
-	union {
-		struct ib_uverbs_flow_spec_hdr hdr;
-		struct {
-			__u32 type;
-			__u16 size;
-			__u16 reserved;
-		};
-	};
-	struct ib_uverbs_exp_flow_tunnel_filter val;
-	struct ib_uverbs_exp_flow_tunnel_filter mask;
-};
-
 struct ib_uverbs_exp_kern_ib_filter {
 	__be32	l3_type_qpn;
 	__u8	dst_gid[16];
@@ -599,19 +582,6 @@ struct ib_uverbs_exp_flow_spec_ib {
 	struct ib_uverbs_exp_kern_ib_filter mask;
 };
 
-struct ib_uverbs_exp_flow_spec_action_tag {
-	union {
-		struct ib_uverbs_flow_spec_hdr hdr;
-		struct {
-			__u32 type;
-			__u16 size;
-			__u16 reserved;
-		};
-	};
-	__be32			      tag_id;
-	__u32			      reserved1;
-};
-
 struct ib_uverbs_exp_flow_spec {
 	union {
 		union {
@@ -627,8 +597,6 @@ struct ib_uverbs_exp_flow_spec {
 		struct ib_uverbs_flow_spec_ipv4    ipv4;
 		struct ib_uverbs_flow_spec_tcp_udp tcp_udp;
 		struct ib_uverbs_flow_spec_ipv6    ipv6;
-		struct ib_uverbs_exp_flow_spec_tunnel	tunnel;
-		struct ib_uverbs_exp_flow_spec_action_tag  flow_tag;
 	};
 };
 

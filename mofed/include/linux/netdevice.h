@@ -160,6 +160,8 @@ netdev_notifier_info_to_dev(void *ptr)
 #if defined(HAVE_BONDING_H) && !defined(HAVE_LAG_TX_TYPE)
 #define MLX_USE_LAG_COMPAT
 #define NETDEV_CHANGELOWERSTATE			0x101B
+#undef NETDEV_CHANGEUPPER
+#define NETDEV_CHANGEUPPER			0x1015
 
 #ifndef HAVE_NETDEV_NOTIFIER_INFO
 #define netdev_notifier_info LINUX_BACKPORT(netdev_notifier_info)
@@ -210,9 +212,6 @@ static inline bool netif_is_lag_port(struct net_device *dev)
 #endif
 
 #if !defined(HAVE_NETDEV_NOTIFIER_CHANGEUPPER_INFO_UPPER_INFO)
-#ifndef NETDEV_CHANGEUPPER
-#define NETDEV_CHANGEUPPER			0x1015
-#endif
 
 #define netdev_notifier_changeupper_info LINUX_BACKPORT(netdev_notifier_changeupper_info)
 struct netdev_notifier_changeupper_info {
@@ -296,11 +295,32 @@ do {								\
 #define netdev_info_once(dev, fmt, ...) \
 	netdev_level_once(KERN_INFO, dev, fmt, ##__VA_ARGS__)
 
-
-#define netdev_WARN_ONCE(dev, condition, format, arg...)		\
-	WARN_ONCE(1, "netdevice: %s%s\n" format, netdev_name(dev)	\
-		  netdev_reg_state(dev), ##args)
 #endif /* netdev_WARN_ONCE */
+
+#ifndef HAVE_NETDEV_REG_STATE
+static inline const char *netdev_reg_state(const struct net_device *dev)
+{
+	switch (dev->reg_state) {
+	case NETREG_UNINITIALIZED: return " (uninitialized)";
+	case NETREG_REGISTERED: return "";
+	case NETREG_UNREGISTERING: return " (unregistering)";
+	case NETREG_UNREGISTERED: return " (unregistered)";
+	case NETREG_RELEASED: return " (released)";
+	case NETREG_DUMMY: return " (dummy)";
+	}
+
+	WARN_ONCE(1, "%s: unknown reg_state %d\n", dev->name, dev->reg_state);
+	return " (unknown)";
+}
+#endif
+
+/* WA for broken netdev_WARN_ONCE in some kernels */
+#ifdef netdev_WARN_ONCE
+#undef netdev_WARN_ONCE
+#endif
+#define netdev_WARN_ONCE(dev, format, args...)				\
+	WARN_ONCE(1, "netdevice: %s%s: " format, netdev_name(dev),	\
+		  netdev_reg_state(dev), ##args)
 
 #ifndef HAVE_NAPI_COMPLETE_DONE
 #define napi_complete_done(p1, p2) napi_complete(p1)
@@ -320,7 +340,7 @@ struct netdev_phys_item_id {
 };
 #endif
 
-#if defined(CONFIG_COMPAT_CLS_FLOWER_MOD) && ! defined(CONFIG_COMPAT_KERNEL_4_9)
+#if defined(CONFIG_COMPAT_CLS_FLOWER_MOD) && !defined(CONFIG_COMPAT_KERNEL_4_9)
 enum {
 	TC_SETUP_MQPRIO,
 	TC_SETUP_CLSU32,

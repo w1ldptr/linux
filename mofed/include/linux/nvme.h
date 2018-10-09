@@ -284,9 +284,7 @@ enum {
 	NVME_CTRL_ONCS_TIMESTAMP		= 1 << 6,
 	NVME_CTRL_VWC_PRESENT			= 1 << 0,
 	NVME_CTRL_OACS_SEC_SUPP                 = 1 << 0,
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 	NVME_CTRL_OACS_DIRECTIVES		= 1 << 5,
-#endif
 	NVME_CTRL_OACS_DBBUF_SUPP		= 1 << 8,
 	NVME_CTRL_LPA_CMD_EFFECTS_LOG		= 1 << 1,
 };
@@ -338,7 +336,6 @@ enum {
 	NVME_ID_CNS_CTRL_LIST		= 0x13,
 };
 
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 enum {
 	NVME_DIR_IDENTIFY		= 0x00,
 	NVME_DIR_STREAMS		= 0x01,
@@ -351,7 +348,6 @@ enum {
 	NVME_DIR_RCV_ST_OP_RESOURCE	= 0x03,
 	NVME_DIR_ENDIR			= 0x01,
 };
-#endif
 
 enum {
 	NVME_NS_FEAT_THIN	= 1 << 0,
@@ -652,9 +648,7 @@ enum {
 	NVME_RW_PRINFO_PRCHK_APP	= 1 << 11,
 	NVME_RW_PRINFO_PRCHK_GUARD	= 1 << 12,
 	NVME_RW_PRINFO_PRACT		= 1 << 13,
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 	NVME_RW_DTYPE_STREAMS		= 1 << 4,
-#endif
 };
 
 struct nvme_dsm_cmd {
@@ -675,9 +669,7 @@ enum {
 	NVME_DSMGMT_AD		= 1 << 2,
 };
 
-#ifdef HAVE_BLK_RQ_NR_DISCARD_SEGMENTS
 #define NVME_DSM_MAX_RANGES	256
-#endif
 
 struct nvme_dsm_range {
 	__le32			cattr;
@@ -731,10 +723,8 @@ enum nvme_admin_opcode {
 	nvme_admin_download_fw		= 0x11,
 	nvme_admin_ns_attach		= 0x15,
 	nvme_admin_keep_alive		= 0x18,
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 	nvme_admin_directive_send	= 0x19,
 	nvme_admin_directive_recv	= 0x1a,
-#endif
 	nvme_admin_dbbuf		= 0x7C,
 	nvme_admin_format_nvm		= 0x80,
 	nvme_admin_security_send	= 0x81,
@@ -904,7 +894,6 @@ struct nvme_get_log_page_command {
 	__u32			rsvd14[2];
 };
 
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 struct nvme_directive_cmd {
 	__u8			opcode;
 	__u8			flags;
@@ -922,7 +911,6 @@ struct nvme_directive_cmd {
 
 	__u32			rsvd16[3];
 };
-#endif
 
 /*
  * Fabrics subcommands.
@@ -1054,7 +1042,6 @@ struct nvme_dbbuf {
 	__u32			rsvd12[6];
 };
 
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 struct streams_directive_params {
 	__le16	msl;
 	__le16	nssa;
@@ -1066,7 +1053,6 @@ struct streams_directive_params {
 	__le16	nso;
 	__u8	rsvd2[6];
 };
-#endif
 
 struct nvme_command {
 	union {
@@ -1088,9 +1074,7 @@ struct nvme_command {
 		struct nvmf_property_set_command prop_set;
 		struct nvmf_property_get_command prop_get;
 		struct nvme_dbbuf dbbuf;
-#ifdef HAVE_BLK_MAX_WRITE_HINTS
 		struct nvme_directive_cmd directive;
-#endif
 	};
 };
 
