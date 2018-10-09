@@ -208,9 +208,6 @@ static void del_sw_hw_rule(struct fs_node *node);
 static bool mlx5_flow_dests_cmp(struct mlx5_flow_destination *d1,
 				struct mlx5_flow_destination *d2);
 static void cleanup_root_ns(struct mlx5_flow_root_namespace *root_ns);
-static struct mlx5_flow_rule *
-find_flow_rule(struct fs_fte *fte,
-	       struct mlx5_flow_destination *dest);
 
 static void tree_init_node(struct fs_node *node,
 			   void (*del_hw_func)(struct fs_node *),
@@ -1253,14 +1250,6 @@ create_flow_handle(struct fs_fte *fte,
 		return ERR_PTR(-ENOMEM);
 
 	do {
-		if (dest) {
-			rule = find_flow_rule(fte, dest + i);
-			if (rule) {
-				refcount_inc(&rule->node.refcount);
-				goto rule_found;
-			}
-		}
-
 		*new_rule = true;
 		rule = alloc_rule(dest + i);
 		if (!rule)
@@ -1282,7 +1271,6 @@ create_flow_handle(struct fs_fte *fte,
 				MLX5_FLOW_DESTINATION_TYPE_COUNTER;
 			*modify_mask |= type ? count : dst;
 		}
-rule_found:
 		handle->rule[i] = rule;
 	} while (++i < dest_num);
 
@@ -1449,18 +1437,6 @@ static bool mlx5_flow_dests_cmp(struct mlx5_flow_destination *d1,
 	return false;
 }
 
-static struct mlx5_flow_rule *find_flow_rule(struct fs_fte *fte,
-					     struct mlx5_flow_destination *dest)
-{
-	struct mlx5_flow_rule *rule;
-
-	list_for_each_entry(rule, &fte->node.children, node.list) {
-		if (mlx5_flow_dests_cmp(&rule->dest_attr, dest))
-			return rule;
-	}
-	return NULL;
-}
-
 static bool check_conflicting_actions(u32 action1, u32 action2)
 {
 	u32 xored_actions = action1 ^ action2;
@@ -1614,15 +1590,13 @@ static struct mlx5_flow_handle *add_rule_fg(struct mlx5_flow_group *fg,
 #endif
 
 	for (i = 0; i < handle->num_rules; i++) {
-		if (refcount_read(&handle->rule[i]->node.refcount) == 1) {
-			dest_name = get_dest_name(&handle->rule[i]->dest_attr);
-			tree_add_node(&handle->rule[i]->node, &fte->node, dest_name);
-			kfree(dest_name);
+		dest_name = get_dest_name(&handle->rule[i]->dest_attr);
+		tree_add_node(&handle->rule[i]->node, &fte->node, dest_name);
+		kfree(dest_name);
 #ifndef MLX_DISABLE_TRACEPOINTS
-			trace_mlx5_fs_add_rule(handle->rule[i]);
+		trace_mlx5_fs_add_rule(handle->rule[i]);
 #endif
-			notify_add_rule(handle->rule[i]);
-		}
+		notify_add_rule(handle->rule[i]);
 	}
 	return handle;
 }
