@@ -1,0 +1,7 @@
+Changes from V1 to V2:
+ - Remove redundant brackets around cnt.
+ - Rename 'errout' label to 'err_unlock'.
+ - Revert changing oldprog to cls_bpf.oldprog in conditional.
+ - Add new helper tc_setup_cb_reoffload().
+ - Make tc_cls_offload_cnt_update() static and remove its export.
+ - Change tc_setup_cb_*() helpers to only return zero or error code.
