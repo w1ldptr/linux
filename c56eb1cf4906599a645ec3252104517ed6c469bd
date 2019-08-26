@@ -1,0 +1,6 @@
+Changes from V2 to V3:
+  - Don't speculatively take rtnl lock when caller already has it.
+
+Changes from V1 to V2:
+  - Speculatively read block->lockeddevcnt in tc_setup_cb_*() to obtain rtnl
+    mutex without retry when block is bound to locked device.
