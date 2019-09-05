@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Rebase on top previous patch to use entry->destructor() and direct typed
+  pointer to action ops.
