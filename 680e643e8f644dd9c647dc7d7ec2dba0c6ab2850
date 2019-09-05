@@ -1,0 +1,8 @@
+Changes V1 -> V2:
+
+- Extend struct flow_action_entry with destructor. Refactor
+  tc_cleanup_flow_action() to call entry->destructor() instead of using
+  switch that dispatches by entry->id and manually executes cleanup.
+
+- Store actions ops in types 'act_ops' pointer instead of opaque 'priv'
+  void pointer.
