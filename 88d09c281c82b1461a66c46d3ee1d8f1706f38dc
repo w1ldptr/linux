@@ -1,3 +1,8 @@
+Changes V3 -> V4:
+
+- Remove act->ops->put_group() and extend act->ops->get_group() with
+  additional destructor argument.
+
 Changes V2 -> V3:
 
 - Split patch 1 in two - first one implements flow_action_entry destructor,
