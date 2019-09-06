@@ -1,0 +1,10 @@
+Changes V2 -> V3:
+
+- Split patch 1 in two - first one implements flow_action_entry destructor,
+  second one uses it to properly take and release reference to psample
+  group in flow_action infra (this patch).
+
+- Use pointer to act->ops->put_group() as a destructor instead of wrapping
+  it in local static function.
+
+- Disable bh when taking psample_groups_lock.
