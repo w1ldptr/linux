@@ -1,0 +1,14 @@
+Changes V3 -> V4:
+
+- Extend actions API get_dev() with additional destructor argument. Remove
+  put_dev() from action API.
+
+Changes V2 -> V3:
+
+- Store direct pointer to act->ops->put_dev as a destructor function if
+  entry->dev is not NULL.
+
+Changes V1 -> V2:
+
+- Rebase on top previous patch to use entry->destructor() and direct typed
+  pointer to action ops.
