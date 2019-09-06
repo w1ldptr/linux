@@ -1,0 +1,20 @@
+Changes V2 -> V3:
+
+- Split patch 1 in two - first one implements flow_action_entry
+  destructor (this patch), second one uses it to properly take and release
+  reference to psample group in flow_action infra.
+
+- Remove act_ops pointer, use opaque 'destr_priv' void pointer to store
+  data to be destroyed.
+
+- Don't use local static wrappers as destructor functions. Store direct
+  pointers to functions that actually do the cleanup.
+
+Changes V1 -> V2:
+
+- Extend struct flow_action_entry with destructor. Refactor
+  tc_cleanup_flow_action() to call entry->destructor() instead of using
+  switch that dispatches by entry->id and manually executes cleanup.
+
+- Store actions ops in types 'act_ops' pointer instead of opaque 'priv'
+  void pointer.
