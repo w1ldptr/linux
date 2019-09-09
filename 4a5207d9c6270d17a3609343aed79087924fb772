@@ -1,3 +1,12 @@
+Changes V4 -> V5:
+
+- Use generic tc_action_priv_destructor typedef as a destructor type in
+  tc_action_ops->get_dev().
+
+- Wrap dev_put() in static tcf_mirred_dev_put() of type
+  tc_action_priv_destructor and use it as a destructor in
+  tcf_mirred_get_dev() in order to remove function type cast.
+
 Changes V3 -> V4:
 
 - Extend actions API get_dev() with additional destructor argument. Remove
