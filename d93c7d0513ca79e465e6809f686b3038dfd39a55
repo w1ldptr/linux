@@ -1,3 +1,8 @@
+Changes V5 -> V6:
+
+- In tcf_tunnel_encap_put_tunnel() can 'priv' to pointer to struct
+  ip_tunnel_info before deallocating it.
+
 Changes V3 -> V4:
 
 - Rename flow_action_entry->destr_priv to destructor_priv.
