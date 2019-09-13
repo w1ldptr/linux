@@ -1,0 +1,32 @@
+Changes V6 -> V7:
+
+- struct tc_action_ops is not defined when CONFIG_NET_CLS_ACT is not set.
+  Wrap body of tcf_sample_get_group() function in ifdef to prevent
+  compilation errors with such config.
+
+Changes V4 -> V5:
+
+- Rename tc_action_ops->get_group() to "get_psample_group".
+
+- Use generic tc_action_priv_destructor typedef as a destructor type in
+  tc_action_ops->get_psample_group().
+
+- Wrap psample_group_put() in static tcf_psample_group_put() of type
+  tc_action_priv_destructor and use it as a destructor in
+  tcf_sample_get_group() in order to remove function type cast.
+
+Changes V3 -> V4:
+
+- Remove act->ops->put_group() and extend act->ops->get_group() with
+  additional destructor argument.
+
+Changes V2 -> V3:
+
+- Split patch 1 in two - first one implements flow_action_entry destructor,
+  second one uses it to properly take and release reference to psample
+  group in flow_action infra (this patch).
+
+- Use pointer to act->ops->put_group() as a destructor instead of wrapping
+  it in local static function.
+
+- Disable bh when taking psample_groups_lock.
