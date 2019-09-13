@@ -1,3 +1,9 @@
+Changes V6 -> V7:
+
+- struct tc_action_ops is not defined when CONFIG_NET_CLS_ACT is not set.
+  Wrap body of tcf_sample_get_group() function in ifdef to prevent
+  compilation errors with such config.
+
 Changes V4 -> V5:
 
 - Rename tc_action_ops->get_group() to "get_psample_group".
