@@ -4,4 +4,5 @@ Changes V1 -> V2:
   implementation as regular qdisc_put() but skips parts that reset qdisc
   and free all packet buffers from gso_skb and skb_bad_txq queues.
 
-- use new qdisc_put_empty() instead of regular qdisc_put() in
+- Use new qdisc_put_empty() instead of regular qdisc_put() in
+  htb_change_class().
