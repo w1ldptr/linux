@@ -1,0 +1,7 @@
+Changes V1 -> V2:
+
+- Use qdisc_purge_queue() instead of qdisc_tree_flush_backlog() to properly
+  reset Qdiscs inside sch tree lock critical section.
+
+- Call qdisc_put_empty() instead of regular qdisc_put() after sch tree lock
+  is released.
