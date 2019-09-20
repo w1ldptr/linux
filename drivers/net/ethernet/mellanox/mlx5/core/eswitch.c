@@ -1687,43 +1687,77 @@ static void esw_vport_disable_qos(struct mlx5_eswitch *esw,
 	vport->qos.enabled = false;
 }
 
+static int esw_tsar_qos_config(struct mlx5_core_dev *dev, u32 *sched_ctx,
+			       u32 parent_ix, u32 tsar_ix,
+			       u32 max_rate, u32 bw_share)
+{
+	u32 bitmask = 0;
+
+	if (!MLX5_CAP_GEN(dev, qos) || !MLX5_CAP_QOS(dev, esw_scheduling))
+		return -EOPNOTSUPP;
+
+	MLX5_SET(scheduling_context, sched_ctx, parent_element_id,
+		 parent_ix);
+	MLX5_SET(scheduling_context, sched_ctx, max_average_bw, max_rate);
+	MLX5_SET(scheduling_context, sched_ctx, bw_share, bw_share);
+	bitmask |= MODIFY_SCHEDULING_ELEMENT_IN_MODIFY_BITMASK_MAX_AVERAGE_BW;
+	bitmask |= MODIFY_SCHEDULING_ELEMENT_IN_MODIFY_BITMASK_BW_SHARE;
+
+	return mlx5_modify_scheduling_element_cmd(dev,
+						  SCHEDULING_HIERARCHY_E_SWITCH,
+						  sched_ctx,
+						  tsar_ix,
+						  bitmask);
+}
+
+static int esw_vgroup_qos_config(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
+				 u32 max_rate, u32 bw_share, struct netlink_ext_ack *extack)
+{
+	u32 sched_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
+	struct mlx5_core_dev *dev = esw->dev;
+	int err;
+
+	err = esw_tsar_qos_config(dev, sched_ctx,
+				  esw->qos.root_tsar_ix, group->tsar_ix,
+				  max_rate, bw_share);
+	if (err) {
+		esw_warn(esw->dev, "E-Switch modify group TSAR element failed (err=%d)\n",
+			 err);
+		NL_SET_ERR_MSG_MOD(extack,"E-Switch modify group TSAR element failed");
+		return err;
+	}
+
+	return 0;
+}
+
 static int esw_vport_qos_config(struct mlx5_eswitch *esw,
 				struct mlx5_vport *vport,
 				u32 max_rate, u32 bw_share,
 				struct netlink_ext_ack *extack)
 {
 	u32 sched_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
+	struct mlx5_vgroup *group = vport->qos.group;
 	struct mlx5_core_dev *dev = esw->dev;
+	u32 parent_tsar_ix;
 	void *vport_elem;
-	u32 bitmask = 0;
 	int err = 0;
-
-	if (!MLX5_CAP_GEN(dev, qos) || !MLX5_CAP_QOS(dev, esw_scheduling))
-		return -EOPNOTSUPP;
 
 	if (!vport->qos.enabled)
 		return -EIO;
 
+	parent_tsar_ix = group ? group->tsar_ix : esw->qos.root_tsar_ix;
 	MLX5_SET(scheduling_context, sched_ctx, element_type,
 		 SCHEDULING_CONTEXT_ELEMENT_TYPE_VPORT);
 	vport_elem = MLX5_ADDR_OF(scheduling_context, sched_ctx,
 				  element_attributes);
 	MLX5_SET(vport_element, vport_elem, vport_number, vport->vport);
-	MLX5_SET(scheduling_context, sched_ctx, parent_element_id,
-		 esw->qos.root_tsar_ix);
-	MLX5_SET(scheduling_context, sched_ctx, max_average_bw,
-		 max_rate);
-	MLX5_SET(scheduling_context, sched_ctx, bw_share, bw_share);
-	bitmask |= MODIFY_SCHEDULING_ELEMENT_IN_MODIFY_BITMASK_MAX_AVERAGE_BW;
-	bitmask |= MODIFY_SCHEDULING_ELEMENT_IN_MODIFY_BITMASK_BW_SHARE;
 
-	err = mlx5_modify_scheduling_element_cmd(dev,
-						 SCHEDULING_HIERARCHY_E_SWITCH,
-						 sched_ctx,
-						 vport->qos.esw_tsar_ix,
-						 bitmask);
+	err = esw_tsar_qos_config(dev, sched_ctx,
+				  parent_tsar_ix, vport->qos.esw_tsar_ix,
+				  max_rate, bw_share);
 	if (err) {
-		esw_warn(esw->dev, "E-Switch modify TSAR vport element failed (vport=%d,err=%d)\n",
+		esw_warn(esw->dev,
+			 "E-Switch modify TSAR vport element failed (vport=%d,err=%d)\n",
 			 vport->vport, err);
 		NL_SET_ERR_MSG_MOD(extack, "E-Switch modify TSAR vport element failed");
 		return err;
