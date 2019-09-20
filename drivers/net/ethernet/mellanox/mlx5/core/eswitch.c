@@ -2628,53 +2628,101 @@ int mlx5_eswitch_set_vport_trust(struct mlx5_eswitch *esw,
 	return 0;
 }
 
-static u32 calculate_vports_min_rate_divider(struct mlx5_eswitch *esw)
+;
+static u32 calculate_min_rate_divider(struct mlx5_eswitch *esw, struct mlx5_vgroup *vgroup,
+				      bool group_level)
 {
 	u32 fw_max_bw_share = MLX5_CAP_QOS(esw->dev, max_tsar_bw_share);
 	struct mlx5_vport *evport;
 	u32 max_guarantee = 0;
 	int i;
 
-	mlx5_esw_for_all_vports(esw, i, evport) {
-		if (!evport->enabled || evport->info.min_rate < max_guarantee)
-			continue;
-		max_guarantee = evport->info.min_rate;
+	if (group_level) {
+		struct mlx5_vgroup *vgroup;
+
+		list_for_each_entry(vgroup, &esw->qos.groups, list) {
+			if (vgroup->min_rate < max_guarantee)
+				continue;
+			max_guarantee = vgroup->min_rate;
+		}
+	} else {
+		mlx5_esw_for_all_vports(esw, i, evport) {
+			if (evport->info.vgroup != vgroup || !evport->enabled ||
+			    evport->info.min_rate < max_guarantee)
+				continue;
+			max_guarantee = evport->info.min_rate;
+		}
 	}
 
 	return max_t(u32, max_guarantee / fw_max_bw_share, 1);
 }
 
+static u32 calc_bw_share(u32 min_rate, u32 divider, u32 fw_max)
+{
+	if (min_rate)
+		return MLX5_RATE_TO_BW_SHARE(min_rate, divider, fw_max);
+
+	return MLX5_MIN_BW_SHARE;
+}
+
 static int normalize_vports_min_rate(struct mlx5_eswitch *esw, u32 divider,
-				     struct netlink_ext_ack *extack)
+				     struct mlx5_vgroup *vgroup, struct netlink_ext_ack *extack)
 {
 	u32 fw_max_bw_share = MLX5_CAP_QOS(esw->dev, max_tsar_bw_share);
 	struct mlx5_vport *evport;
-	u32 vport_max_rate;
-	u32 vport_min_rate;
 	u32 bw_share;
 	int err;
 	int i;
 
 	mlx5_esw_for_all_vports(esw, i, evport) {
-		if (!evport->enabled)
+		if (!evport->enabled || evport->info.vgroup != vgroup)
 			continue;
-		vport_min_rate = evport->info.min_rate;
-		vport_max_rate = evport->info.max_rate;
-		bw_share = MLX5_MIN_BW_SHARE;
-
-		if (vport_min_rate)
-			bw_share = MLX5_RATE_TO_BW_SHARE(vport_min_rate,
-							 divider,
-							 fw_max_bw_share);
+		bw_share = calc_bw_share(evport->info.min_rate, divider,
+					 fw_max_bw_share);
 
 		if (bw_share == evport->qos.bw_share)
 			continue;
 
-		err = esw_vport_qos_config(esw, evport, vport_max_rate,
+		err = esw_vport_qos_config(esw, evport, evport->info.max_rate,
 					   bw_share, extack);
-		if (!err)
-			evport->qos.bw_share = bw_share;
-		else
+		if (err)
+			return err;
+
+		evport->qos.bw_share = bw_share;
+	}
+
+	return 0;
+}
+
+static int normalize_vgroups_min_rate(struct mlx5_eswitch *esw, u32 divider,
+				      struct netlink_ext_ack *extack)
+{
+	u32 fw_max_bw_share = MLX5_CAP_QOS(esw->dev, max_tsar_bw_share);
+	struct mlx5_vgroup *vgroup;
+	u32 group_divider;
+	u32 bw_share;
+	int err;
+
+	list_for_each_entry(vgroup, &esw->qos.groups, list) {
+		bw_share = calc_bw_share(vgroup->min_rate, divider, fw_max_bw_share);
+
+		if (bw_share == vgroup->bw_share)
+			continue;
+
+		err = esw_vgroup_qos_config(esw, vgroup, vgroup->max_rate,
+					    bw_share, extack);
+		if (err)
+			return err;
+
+		vgroup->bw_share = bw_share;
+
+		/* All the group's vports need to be set with default bw_share
+		 * to enable them with QOS
+		 */
+		group_divider = calculate_min_rate_divider(esw, vgroup, false);
+		err = normalize_vports_min_rate(esw, group_divider, vgroup, extack);
+
+		if (err)
 			return err;
 	}
 
@@ -2707,8 +2755,8 @@ __mlx5_eswitch_set_vport_min_rate(struct mlx5_eswitch *esw, u16 vport,
 
 	previous_min_rate = evport->info.min_rate;
 	evport->info.min_rate = min_rate;
-	divider = calculate_vports_min_rate_divider(esw);
-	err = normalize_vports_min_rate(esw, divider, extack);
+	divider = calculate_min_rate_divider(esw, evport->info.vgroup, false);
+	err = normalize_vports_min_rate(esw, divider, evport->info.vgroup, extack);
 	if (err)
 		evport->info.min_rate = previous_min_rate;
 
@@ -2746,6 +2794,12 @@ __mlx5_eswitch_set_vport_max_rate(struct mlx5_eswitch *esw, u16 vport,
 		return -EOPNOTSUPP;
 	if (max_rate == evport->info.max_rate)
 		return 0;
+
+	/* If parent group has rate limit need to set to group
+	 * value when new max rate is 0.
+	 */
+	if (evport->qos.group && !max_rate)
+		max_rate = evport->qos.group->max_rate;
 
 	err = esw_vport_qos_config(esw, evport, max_rate, evport->qos.bw_share, extack);
 	if (!err)

@@ -118,6 +118,7 @@ struct mlx5_vport_info {
 	int                     link_state;
 	u32                     min_rate;
 	u32                     max_rate;
+	struct mlx5_vgroup	*vgroup;
 	bool                    spoofchk;
 	bool                    trusted;
 };
