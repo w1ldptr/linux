@@ -797,7 +797,9 @@ struct mlx5_ifc_qos_cap_bits {
 	u8         reserved_at_4[0x1];
 	u8         packet_pacing_burst_bound[0x1];
 	u8         packet_pacing_typical_size[0x1];
-	u8         reserved_at_7[0x19];
+	u8         reserved_at_7[0x5];
+	u8         log_esw_max_sched_depth[0x4];
+	u8         reserved_at_10[0x10];
 
 	u8         reserved_at_20[0x20];
 

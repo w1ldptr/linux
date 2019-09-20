@@ -122,6 +122,15 @@ struct mlx5_vport_info {
 	bool                    trusted;
 };
 
+struct mlx5_vgroup {
+	struct mlx5_core_dev	*dev;
+	u32			tsar_ix;
+	u32			max_rate;
+	u32			min_rate;
+	u32			bw_share;
+	struct list_head	list;
+};
+
 /* Vport context events */
 enum mlx5_eswitch_vport_event {
 	MLX5_VPORT_UC_ADDR_CHANGE = BIT(0),
@@ -147,6 +156,7 @@ struct mlx5_vport {
 		bool            enabled;
 		u32             esw_tsar_ix;
 		u32             bw_share;
+		struct mlx5_vgroup *group;
 	} qos;
 
 	bool                    enabled;
@@ -255,7 +265,9 @@ struct mlx5_eswitch {
 
 	struct {
 		bool            enabled;
-		u32             root_tsar_id;
+		u32             root_tsar_ix;
+		struct mlx5_vgroup *group0;
+		struct list_head groups;
 	} qos;
 
 	struct mlx5_esw_offload offloads;
@@ -307,6 +319,10 @@ int mlx5_eswitch_set_vport_min_rate(struct mlx5_eswitch *esw, u16 vport,
 				    u32 min_rate, struct netlink_ext_ack *extack);
 int mlx5_eswitch_set_vport_max_rate(struct mlx5_eswitch *esw, u16 vport,
 				    u32 max_rate, struct netlink_ext_ack *extack);
+struct mlx5_vgroup *mlx5_eswitch_create_vgroup(struct mlx5_eswitch *esw,
+					       struct netlink_ext_ack *extack);
+int mlx5_eswitch_destroy_vgroup(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
+				struct netlink_ext_ack *extack);
 int mlx5_eswitch_set_vepa(struct mlx5_eswitch *esw, u8 setting);
 int mlx5_eswitch_get_vepa(struct mlx5_eswitch *esw, u8 *setting);
 int mlx5_eswitch_get_vport_config(struct mlx5_eswitch *esw,

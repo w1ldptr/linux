@@ -1482,6 +1482,73 @@ static bool element_type_supported(struct mlx5_eswitch *esw, int type)
 }
 
 /* Vport QoS management */
+struct mlx5_vgroup *mlx5_eswitch_create_vgroup(struct mlx5_eswitch *esw,
+					       struct netlink_ext_ack *extack)
+{
+	u32 tsar_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
+	struct mlx5_core_dev *dev = esw->dev;
+	struct mlx5_vgroup *group;
+	u32 tsar_ix;
+	int err;
+
+	MLX5_SET(scheduling_context, tsar_ctx, parent_element_id,
+		 esw->qos.root_tsar_ix);
+	err = mlx5_create_scheduling_element_cmd(dev,
+						 SCHEDULING_HIERARCHY_E_SWITCH,
+						 tsar_ctx,
+						 &tsar_ix);
+	if (err) {
+		esw_warn(dev, "E-Switch create TSAR for group failed (%d)\n", err);
+		NL_SET_ERR_MSG_MOD(extack, "E-Switch create TSAR for group failed");
+		return ERR_PTR(err);
+	}
+
+	group = kzalloc(sizeof(*group), GFP_KERNEL);
+	if (!group) {
+		err = -ENOMEM;
+		goto clean_tsar;
+	}
+
+	group->tsar_ix = tsar_ix;
+	group->dev = dev;
+
+	list_add_tail(&group->list, &esw->qos.groups);
+	if (err)
+		goto clean_group;
+
+	return group;
+
+clean_group:
+	kfree(group);
+
+clean_tsar:
+	mlx5_destroy_scheduling_element_cmd(dev,
+					    SCHEDULING_HIERARCHY_E_SWITCH,
+					    tsar_ix);
+
+	return ERR_PTR(err);
+}
+
+int mlx5_eswitch_destroy_vgroup(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
+				struct netlink_ext_ack *extack)
+{
+	int err;
+
+	err = mlx5_destroy_scheduling_element_cmd(esw->dev,
+						  SCHEDULING_HIERARCHY_E_SWITCH,
+						  group->tsar_ix);
+	if (err) {
+		esw_warn(esw->dev, "E-Switch destroy TSAR_ID %d failed (%d)\n",
+			 group->tsar_ix, err);
+		NL_SET_ERR_MSG_MOD(extack, "E-Switch destroy TSAR_ID failed");
+	}
+
+	list_del(&group->list);
+	kfree(group);
+
+	return err;
+}
+
 static void esw_create_tsar(struct mlx5_eswitch *esw)
 {
 	u32 tsar_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
@@ -1507,10 +1574,27 @@ static void esw_create_tsar(struct mlx5_eswitch *esw)
 	err = mlx5_create_scheduling_element_cmd(dev,
 						 SCHEDULING_HIERARCHY_E_SWITCH,
 						 tsar_ctx,
-						 &esw->qos.root_tsar_id);
+						 &esw->qos.root_tsar_ix);
 	if (err) {
-		esw_warn(esw->dev, "E-Switch create TSAR failed (%d)\n", err);
+		esw_warn(esw->dev, "E-Switch create root TSAR failed (%d)\n",
+			 err);
 		return;
+	}
+
+	if (MLX5_CAP_QOS(dev, log_esw_max_sched_depth)) {
+		INIT_LIST_HEAD(&esw->qos.groups);
+
+		esw->qos.group0 = mlx5_eswitch_create_vgroup(esw, NULL);
+		if (IS_ERR(esw->qos.group0)) {
+			esw_warn(esw->dev, "E-Switch create rate group 0 failed (%d)\n",
+				 err);
+			mlx5_destroy_scheduling_element_cmd(esw->dev,
+							    SCHEDULING_HIERARCHY_E_SWITCH,
+							    esw->qos.root_tsar_ix);
+			return;
+		}
+	} else {
+		esw->qos.group0 = NULL;
 	}
 
 	esw->qos.enabled = true;
@@ -1523,9 +1607,12 @@ static void esw_destroy_tsar(struct mlx5_eswitch *esw)
 	if (!esw->qos.enabled)
 		return;
 
+	if (esw->qos.group0)
+		mlx5_eswitch_destroy_vgroup(esw, esw->qos.group0, NULL);
+
 	err = mlx5_destroy_scheduling_element_cmd(esw->dev,
 						  SCHEDULING_HIERARCHY_E_SWITCH,
-						  esw->qos.root_tsar_id);
+						  esw->qos.root_tsar_ix);
 	if (err)
 		esw_warn(esw->dev, "E-Switch destroy TSAR failed (%d)\n", err);
 
@@ -1554,7 +1641,7 @@ static int esw_vport_enable_qos(struct mlx5_eswitch *esw,
 				  element_attributes);
 	MLX5_SET(vport_element, vport_elem, vport_number, vport->vport);
 	MLX5_SET(scheduling_context, sched_ctx, parent_element_id,
-		 esw->qos.root_tsar_id);
+		 esw->qos.root_tsar_ix);
 	MLX5_SET(scheduling_context, sched_ctx, max_average_bw,
 		 initial_max_rate);
 	MLX5_SET(scheduling_context, sched_ctx, bw_share, initial_bw_share);
@@ -1614,7 +1701,7 @@ static int esw_vport_qos_config(struct mlx5_eswitch *esw,
 				  element_attributes);
 	MLX5_SET(vport_element, vport_elem, vport_number, vport->vport);
 	MLX5_SET(scheduling_context, sched_ctx, parent_element_id,
-		 esw->qos.root_tsar_id);
+		 esw->qos.root_tsar_ix);
 	MLX5_SET(scheduling_context, sched_ctx, max_average_bw,
 		 max_rate);
 	MLX5_SET(scheduling_context, sched_ctx, bw_share, bw_share);
