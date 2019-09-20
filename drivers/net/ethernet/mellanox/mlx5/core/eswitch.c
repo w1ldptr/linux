@@ -2949,6 +2949,94 @@ free_out:
 	return err;
 }
 
+int mlx5_eswitch_set_vgroup_min_rate(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
+				     u32 min_rate, struct netlink_ext_ack *extack)
+{
+	u32 fw_max_bw_share = MLX5_CAP_QOS(esw->dev, max_tsar_bw_share);
+	bool min_rate_supported = MLX5_CAP_QOS(esw->dev, esw_bw_share) &&
+				  fw_max_bw_share >= MLX5_MIN_BW_SHARE;
+	u32 previous_min_rate, divider;
+	int err = 0;
+
+	if (!min_rate_supported ||
+	    !MLX5_CAP_QOS(esw->dev, log_esw_max_sched_depth))
+		return -EOPNOTSUPP;
+
+	mutex_lock(&esw->state_lock);
+	if (min_rate == group->min_rate)
+		goto unlock;
+
+	previous_min_rate = group->min_rate;
+	group->min_rate = min_rate;
+	divider = calculate_min_rate_divider(esw, group, true);
+	err = normalize_vgroups_min_rate(esw, divider, extack);
+	if (err) {
+		group->min_rate = previous_min_rate;
+		esw_warn(esw->dev, "E-Switch group min rate setting failed\n");
+		NL_SET_ERR_MSG_MOD(extack, "E-Switch group min rate setting failed");
+
+		/* Attempt restorin previous configuration */
+		divider = calculate_min_rate_divider(esw, group, true);
+		if (normalize_vgroups_min_rate(esw, divider, extack)) {
+			esw_warn(esw->dev, "E-Switch BW share restore failed\n");
+			NL_SET_ERR_MSG_MOD(extack, "E-Switch BW share restore failed");
+		}
+	}
+
+unlock:
+	mutex_unlock(&esw->state_lock);
+
+	return err;
+}
+
+int mlx5_eswitch_set_vgroup_max_rate(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
+				     u32 max_rate, struct netlink_ext_ack *extack)
+{
+	struct mlx5_core_dev *dev = esw->dev;
+	int i, err = 0;
+
+	if (!MLX5_CAP_QOS(dev, log_esw_max_sched_depth) ||
+	    !MLX5_CAP_QOS(dev, log_esw_max_sched_depth))
+		return -EOPNOTSUPP;
+
+	if (!esw->qos.enabled || !MLX5_CAP_GEN(dev, qos) ||
+	    !MLX5_CAP_QOS(dev, esw_scheduling))
+		return 0;
+
+	mutex_lock(&esw->state_lock);
+	if (group->max_rate == max_rate)
+		goto unlock;
+
+	err = esw_vgroup_qos_config(esw, group, max_rate, group->bw_share, extack);
+	if (err)
+		goto unlock;
+
+	group->max_rate = max_rate;
+
+	/* Any unlimited vports in the group should be set
+	* with the value of the group.
+	*/
+	for (i = 0; i < esw->enabled_vports; i++) {
+		if (esw->vports[i].info.vgroup == group && !esw->vports[i].info.max_rate) {
+			err = esw_vport_qos_config(esw, esw->vports + i, max_rate,
+						   esw->vports[i].qos.bw_share, extack);
+			if (err) {
+				esw_warn(esw->dev,
+					 "E-Switch vport implicit rate limit"
+					 " setting failed (vport=%d)\n",
+					 i);
+				NL_SET_ERR_MSG_MOD(extack,
+						   "E-Switch vport implicit rate limit"
+						   " setting failed");
+			}
+		}
+	}
+
+unlock:
+	mutex_unlock(&esw->state_lock);
+	return err;
+}
+
 u8 mlx5_eswitch_mode(struct mlx5_eswitch *esw)
 {
 	return ESW_ALLOWED(esw) ? esw->mode : MLX5_ESWITCH_NONE;
