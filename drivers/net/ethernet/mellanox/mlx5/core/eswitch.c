@@ -3059,6 +3059,93 @@ unlock:
 	return err;
 }
 
+static int esw_update_vgroup_scheduling_element(struct mlx5_eswitch *esw,
+						struct mlx5_vport *vport,
+						struct mlx5_vgroup *curr_group,
+						struct mlx5_vgroup *new_group,
+						struct netlink_ext_ack *extack)
+{
+	u32 max_rate;
+	int err;
+
+	err = mlx5_destroy_scheduling_element_cmd(esw->dev,
+						  SCHEDULING_HIERARCHY_E_SWITCH,
+						  vport->qos.esw_tsar_ix);
+	if (err) {
+		esw_warn(esw->dev,
+			 "E-Switch destroy TSAR vport element failed (vport=%d,err=%d)\n",
+			 vport->vport, err);
+		NL_SET_ERR_MSG_MOD(extack, "E-Switch destroy TSAR vport element failed");
+		goto out;
+	}
+
+	vport->qos.group = new_group;
+	max_rate = vport->info.max_rate ? vport->info.max_rate :
+					  new_group->max_rate;
+
+	/* If vport is unlimited, we set the group's value.
+	 * Therefore, if the group is limited it will apply to
+	 * the vport as well and if not, vport will remain unlimited.
+	 */
+	err = esw_vport_create_sched_element(esw, vport, max_rate, vport->qos.bw_share);
+	if (err) {
+		vport->qos.group = curr_group;
+		if (!vport->info.max_rate)
+			max_rate = curr_group->max_rate;
+		if (esw_vport_create_sched_element(esw, vport, max_rate,
+						   vport->qos.bw_share)) {
+			esw_warn(esw->dev, "E-Switch vport group set failed."
+				 "Can't restore prev configuration (vport=%d)\n",
+				 vport->vport);
+			NL_SET_ERR_MSG_MOD(extack,"E-Switch vport group set failed."
+					   "Can't restore prev configuration");
+		}
+		goto out;
+	}
+
+out:
+	return err;
+}
+
+int mlx5_eswitch_vport_update_vgroup(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+				     struct mlx5_vgroup *group, struct netlink_ext_ack *extack)
+{
+	struct mlx5_vgroup *curr_group = vport->qos.group;
+	struct mlx5_vgroup *new_group;
+	u32 divider;
+	int err;
+
+	if (!MLX5_CAP_QOS(esw->dev, log_esw_max_sched_depth))
+		return -EOPNOTSUPP;
+
+	if (!esw->qos.enabled || !MLX5_CAP_GEN(esw->dev, qos) ||
+	    !MLX5_CAP_QOS(esw->dev, esw_scheduling))
+		return 0;
+
+	mutex_lock(&esw->state_lock);
+	new_group = group ?: esw->qos.group0;
+	err = esw_update_vgroup_scheduling_element(esw, vport, curr_group,
+						   new_group, extack);
+	if (err)
+		goto unlock;
+
+	vport->info.vgroup = group;
+
+	/* Recalculate bw share weights of old and new groups */
+	if (vport->qos.bw_share) {
+		divider = calculate_min_rate_divider(esw, curr_group, false);
+		normalize_vports_min_rate(esw, divider, curr_group, extack);
+
+		divider = calculate_min_rate_divider(esw, new_group, false);
+		normalize_vports_min_rate(esw, divider, new_group, extack);
+	}
+
+unlock:
+	mutex_unlock(&esw->state_lock);
+
+	return err;
+}
+
 u8 mlx5_eswitch_mode(struct mlx5_eswitch *esw)
 {
 	return ESW_ALLOWED(esw) ? esw->mode : MLX5_ESWITCH_NONE;

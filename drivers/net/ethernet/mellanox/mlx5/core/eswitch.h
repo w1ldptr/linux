@@ -329,6 +329,8 @@ int mlx5_eswitch_set_vgroup_min_rate(struct mlx5_eswitch *esw, struct mlx5_vgrou
 				     u32 min_rate, struct netlink_ext_ack *extack);
 int mlx5_eswitch_set_vgroup_max_rate(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
 				     u32 max_rate, struct netlink_ext_ack *extack);
+int mlx5_eswitch_vport_update_vgroup(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+				     struct mlx5_vgroup *group, struct netlink_ext_ack *extack);
 int mlx5_eswitch_set_vepa(struct mlx5_eswitch *esw, u8 setting);
 int mlx5_eswitch_get_vepa(struct mlx5_eswitch *esw, u8 *setting);
 int mlx5_eswitch_get_vport_config(struct mlx5_eswitch *esw,
