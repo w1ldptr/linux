@@ -1628,32 +1628,28 @@ static void esw_destroy_tsar(struct mlx5_eswitch *esw)
 	esw->qos.enabled = false;
 }
 
-static int esw_vport_enable_qos(struct mlx5_eswitch *esw,
-				struct mlx5_vport *vport,
-				u32 initial_max_rate, u32 initial_bw_share)
+static int esw_vport_create_sched_element(struct mlx5_eswitch *esw,
+					  struct mlx5_vport *vport,
+					  u32 max_rate, u32 bw_share)
 {
 	u32 sched_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
+	struct mlx5_vgroup *group = vport->qos.group;
 	struct mlx5_core_dev *dev = esw->dev;
+	u32 parent_tsar_ix;
 	void *vport_elem;
-	int err = 0;
+	int err;
 
-	if (!esw->qos.enabled || !MLX5_CAP_GEN(dev, qos) ||
-	    !MLX5_CAP_QOS(dev, esw_scheduling))
-		return 0;
-
-	if (vport->qos.enabled)
-		return -EEXIST;
-
+	parent_tsar_ix = group ? group->tsar_ix : esw->qos.root_tsar_ix;
 	MLX5_SET(scheduling_context, sched_ctx, element_type,
 		 SCHEDULING_CONTEXT_ELEMENT_TYPE_VPORT);
 	vport_elem = MLX5_ADDR_OF(scheduling_context, sched_ctx,
 				  element_attributes);
 	MLX5_SET(vport_element, vport_elem, vport_number, vport->vport);
 	MLX5_SET(scheduling_context, sched_ctx, parent_element_id,
-		 esw->qos.root_tsar_ix);
+		 parent_tsar_ix);
 	MLX5_SET(scheduling_context, sched_ctx, max_average_bw,
-		 initial_max_rate);
-	MLX5_SET(scheduling_context, sched_ctx, bw_share, initial_bw_share);
+		 max_rate);
+	MLX5_SET(scheduling_context, sched_ctx, bw_share, bw_share);
 
 	err = mlx5_create_scheduling_element_cmd(dev,
 						 SCHEDULING_HIERARCHY_E_SWITCH,
@@ -1664,6 +1660,30 @@ static int esw_vport_enable_qos(struct mlx5_eswitch *esw,
 			 vport->vport, err);
 		return err;
 	}
+
+	return 0;
+}
+
+static int esw_vport_enable_qos(struct mlx5_eswitch *esw,
+				struct mlx5_vport *vport,
+				u32 initial_max_rate, u32 initial_bw_share)
+{
+	struct mlx5_core_dev *dev = esw->dev;
+	int err;
+
+	if (!esw->qos.enabled || !MLX5_CAP_GEN(dev, qos) ||
+	    !MLX5_CAP_QOS(dev, esw_scheduling))
+		return 0;
+
+	if (vport->qos.enabled)
+		return -EEXIST;
+
+	vport->qos.group = esw->qos.group0;
+
+	err = esw_vport_create_sched_element(esw, vport, initial_max_rate,
+					     initial_bw_share);
+	if (err)
+		return err;
 
 	vport->qos.enabled = true;
 	return 0;
@@ -1676,6 +1696,8 @@ static void esw_vport_disable_qos(struct mlx5_eswitch *esw,
 
 	if (!vport->qos.enabled)
 		return;
+	WARN(vport->qos.group && vport->qos.group != esw->qos.group0,
+	     "Disabling QoS on port before detaching it from group");
 
 	err = mlx5_destroy_scheduling_element_cmd(esw->dev,
 						  SCHEDULING_HIERARCHY_E_SWITCH,
