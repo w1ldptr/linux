@@ -1,0 +1,12 @@
+Changes V1 -> V2:
+
+- Refactor first loop in multiq_tune() to save child Qdiscs that are being
+  removed into an array and call qdisc_put_empty() on all of its elements
+  after sch tree lock critical section. Revert the change in V1 that
+  obtained and released sch tree lock on every loop iteration.
+
+- Use qdisc_purge_queue() instead of qdisc_tree_flush_backlog() to properly
+  reset Qdiscs inside sch tree lock critical section.
+
+- Use qdisc_put_empty() in both loops of multiq_tune() instead of regular
+  qdisc_put().
