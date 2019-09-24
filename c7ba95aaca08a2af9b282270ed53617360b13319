@@ -1,3 +1,8 @@
+Changes V2 -> V3:
+
+- Remove qdisc_put_empty() implementation introduced in V2. Use regular
+  qdisc_put() instead.
+
 Changes V1 -> V2:
 
 - Extend sch API with new qdisc_put_empty() function that has same
