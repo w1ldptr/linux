@@ -1,3 +1,7 @@
+Changes V2 -> V3:
+
+- Use regular qdisc_put() instead of qdisc_put_empty() introduced in V2.
+
 Changes V1 -> V2:
 
 - Use qdisc_purge_queue() instead of qdisc_tree_flush_backlog() to properly
