@@ -1,3 +1,7 @@
+Changes V2 -> V3:
+
+- Remove flags validation code from
+
 Changes V1 -> V2:
 
 - Validate action flags in tcf_idr_create() function and only allocate
