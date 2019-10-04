@@ -1,3 +1,8 @@
+Changes V3 -> V4:
+
+- Define tca_flags_allowed in common pkt_cls.h to be reused by actions in
+  following patches as a validation_data.
+
 Changes V2 -> V3:
 
 - Remove flags validation code from tcf_idr_create().
