@@ -1,6 +1,6 @@
 Changes V2 -> V3:
 
-- Remove flags validation code from
+- Remove flags validation code from tcf_idr_create().
 
 Changes V1 -> V2:
 
