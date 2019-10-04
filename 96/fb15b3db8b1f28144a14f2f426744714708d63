@@ -1,3 +1,8 @@
+Changes V3 -> V4:
+
+- Use common tca_flags_allowed from pkt_cls.h instead of defining it
+  locally.
+
 Changes V2 -> V3:
 
 - Change flags type to NLA_BITFIELD32 and use nla_policy for validation.
