@@ -1,0 +1,15 @@
+Changes V3 -> V4:
+
+- Define tca_flags_allowed in common pkt_cls.h to be reused by actions in
+  following patches as a validation_data.
+
+Changes V2 -> V3:
+
+- Remove flags validation code from tcf_idr_create().
+
+Changes V1 -> V2:
+
+- Validate action flags in tcf_idr_create() function and only allocate
+  percpu counters when TCA_ACT_FLAGS_FAST_INIT is not set.
+
+- Set extack error message, if action flags validation fails.
