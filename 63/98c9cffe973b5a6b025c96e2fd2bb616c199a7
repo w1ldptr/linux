@@ -1,3 +1,14 @@
+Changes V4 -> V5:
+
+- Expand flag TCA_ACT_FLAGS_FAST_INIT comment with more detailed
+  explanation.
+
+- Move definition of static const u32 tca_flags_allowed from user-space
+  pkt_cls header to kernel private pkt_cls. This is necessary because u32
+  type is not exported to user-space header with some config options, which
+  causes compilation to fail, and because it is the right thing to do since
+  this variable doesn't need to be exposed to user-space.
+
 Changes V3 -> V4:
 
 - Define tca_flags_allowed in common pkt_cls.h to be reused by actions in
