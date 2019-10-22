@@ -1,4 +1,0 @@
-Changes V1 -> V2:
-
-- Extract skb_tc_reinsert() refactoring and related mirred changes into
-  standalone patch.
