@@ -1,3 +1,9 @@
+Changes V2 -> V3:
+
+- Only include tcf_chain_lookup_rcu() function when skb extension config
+  option is enabled in order to prevent compiler warning about unused
+  static function.
+
 Changes V1 -> V2:
 
 - Rebase on current net-next.
