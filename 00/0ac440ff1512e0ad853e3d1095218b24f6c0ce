@@ -1,0 +1,16 @@
+Changes V1 -> V2:
+
+- Rebase on current net-next.
+
+- Introduce new tcf_classify_ingress() function that is only called from
+  ingress data path. Put all skb_ext-handling code into the new function
+  and call regular tcf_classify() with tcf_proto instance obtained as a
+  result of skb chain extension lookup.
+
+- Extend tcf_classify() with 'orig_tp' argument. It is necessary to
+  distinguish tp obtained from skb chain extension from original tp that
+  is needed by reclassify functionality.
+
+- Embed pointer to block into mini_Qdisc. Use it to directly obtain pointer
+  to block from atomic data path context instead of extending Qdisc ops API
+  with
