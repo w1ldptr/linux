@@ -13,4 +13,4 @@ Changes V1 -> V2:
 
 - Embed pointer to block into mini_Qdisc. Use it to directly obtain pointer
   to block from atomic data path context instead of extending Qdisc ops API
-  with
+  with ingress_block_get_rcu() callback.
