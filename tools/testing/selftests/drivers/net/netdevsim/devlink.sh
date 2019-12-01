@@ -5,7 +5,7 @@ lib_dir=$(dirname $0)/../../../net/forwarding
 
 ALL_TESTS="fw_flash_test params_test regions_test reload_test \
 	   netns_reload_test resource_test dev_info_test \
-	   empty_reporter_test dummy_reporter_test slice_test"
+	   empty_reporter_test dummy_reporter_test slice_test slice_rate_test"
 NUM_NETIFS=0
 source $lib_dir/lib.sh
 
@@ -492,6 +492,26 @@ slice_test()
 		i=$(($i+1))
 	done
 	log_test "slice test"
+}
+
+slice_rate_leafs_get()
+{
+	local handle=$1
+
+	cmd_jq "devlink slice rate show -j" \
+	       '.[] | to_entries | .[] | select(.value.type == "leaf") | .key | select(contains("'$handle'"))'
+}
+
+slice_rate_test()
+{
+	RET=0
+
+	local leafs=`slice_rate_leafs_get $DL_HANDLE`
+	local num_leafs=`echo $leafs | wc -w`
+	[ $num_leafs == $VF_COUNT ]
+	check_err $? "Expected $VF_COUNT rate leafs but got $num_leafs"
+
+	log_test "slice rate test"
 }
 
 setup_prepare()
