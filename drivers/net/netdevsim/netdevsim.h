@@ -158,6 +158,7 @@ struct nsim_slice {
 	struct devlink_slice *devlink_slice;
 	unsigned int slice_index;
 	struct nsim_bus_dev *nsim_bus_dev;
+	struct devlink_slice_rate *devlink_rate;
 };
 
 struct nsim_dev {

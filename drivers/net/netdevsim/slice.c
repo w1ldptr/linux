@@ -66,6 +66,7 @@ int nsim_dev_slices_create(struct nsim_dev *nsim_dev, struct devlink *devlink)
 
 	for (vf = 0; vf < max_vfs; vf++) {
 		struct nsim_slice *nsim_slice = &nsim_dev->slices[vf];
+		struct devlink_slice_rate *devlink_rate;
 		struct devlink_slice *devlink_slice;
 
 		nsim_slice->nsim_bus_dev = nsim_dev->nsim_bus_dev;
@@ -80,13 +81,29 @@ int nsim_dev_slices_create(struct nsim_dev *nsim_dev, struct devlink *devlink)
 		}
 		nsim_slice->devlink_slice = devlink_slice;
 		nsim_slice->slice_index = vf;
+
+		devlink_rate = devlink_slice_rate_leaf_create(devlink_slice,
+							      NULL);
+		if (IS_ERR(devlink_rate)) {
+			vf++;
+			err = PTR_ERR(devlink_rate);
+			goto err_slices_destroy;
+		}
+		nsim_slice->devlink_rate = devlink_rate;
 	}
 
 	return 0;
 
 err_slices_destroy:
-	for (vf--; vf >= 0; vf--)
-		devlink_slice_destroy(nsim_dev->slices[vf].devlink_slice);
+	for (vf--; vf >= 0; vf--) {
+		struct nsim_slice *nsim_slice = &nsim_dev->slices[vf];
+		struct devlink_slice_rate *devlink_rate;
+
+		devlink_rate = nsim_slice->devlink_rate;
+		if (devlink_rate)
+			devlink_slice_rate_leaf_destroy(devlink_rate);
+		devlink_slice_destroy(nsim_slice->devlink_slice);
+	}
 	return err;
 }
 
@@ -94,7 +111,11 @@ void nsim_dev_slices_destroy(struct nsim_dev *nsim_dev)
 {
 	int vf;
 
-	for (vf = 0; vf < nsim_dev->nsim_bus_dev->max_vfs; vf++)
-		devlink_slice_destroy(nsim_dev->slices[vf].devlink_slice);
+	for (vf = 0; vf < nsim_dev->nsim_bus_dev->max_vfs; vf++) {
+		struct nsim_slice *nsim_slice = &nsim_dev->slices[vf];
+
+		devlink_slice_rate_leaf_destroy(nsim_slice->devlink_rate);
+		devlink_slice_destroy(nsim_slice->devlink_slice);
+	}
 }
 
