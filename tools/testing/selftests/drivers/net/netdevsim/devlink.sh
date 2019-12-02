@@ -502,6 +502,23 @@ slice_rate_leafs_get()
 	       '.[] | to_entries | .[] | select(.value.type == "leaf") | .key | select(contains("'$handle'"))'
 }
 
+slice_rate_attr_set()
+{
+	local handle=$1
+	local name=$2
+	local value=$3
+
+	devlink slice rate set $handle $name $value
+}
+
+slice_rate_attr_get()
+{
+	local handle=$1
+	local name=$2
+
+	cmd_jq "devlink slice rate show $handle -j" '.[][].'$name
+}
+
 slice_rate_test()
 {
 	RET=0
@@ -510,6 +527,30 @@ slice_rate_test()
 	local num_leafs=`echo $leafs | wc -w`
 	[ $num_leafs == $VF_COUNT ]
 	check_err $? "Expected $VF_COUNT rate leafs but got $num_leafs"
+
+	rate=10
+	for slice in $leafs
+	do
+	    slice_rate_attr_set "$slice" min_tx_rate $rate
+	    check_err $? "Failed to set min_tx_rate value"
+	    value=$(slice_rate_attr_get $slice min_tx_rate)
+	    check_err $? "Failed to get min_tx_rate attr value"
+	    [ "$value" == "$rate" ]
+	    check_err $? "Unexpected min_tx_rate attr value $value != $rate"
+	    i=$(($i+10))
+	done
+
+	rate=100
+	for slice in $leafs
+	do
+	    slice_rate_attr_set "$slice" max_tx_rate $rate
+	    check_err $? "Failed to set max_tx_rate value"
+	    value=$(slice_rate_attr_get $slice max_tx_rate)
+	    check_err $? "Failed to get max_tx_rate attr value"
+	    [ "$value" == "$rate" ]
+	    check_err $? "Unexpected max_tx_rate attr value $value != $rate"
+	    i=$(($i+100))
+	done
 
 	log_test "slice rate test"
 }
