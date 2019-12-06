@@ -206,6 +206,7 @@ enum devlink_slice_flavour {
 
 enum devlink_slice_rate_type {
 	DEVLINK_SLICE_RATE_TYPE_LEAF,
+	DEVLINK_SLICE_RATE_TYPE_NODE,
 };
 
 enum devlink_param_cmode {
@@ -455,12 +456,15 @@ enum devlink_attr {
 	DEVLINK_ATTR_SLICE_RATE_TYPE,		/* u16 */
 	DEVLINK_ATTR_SLICE_RATE_MIN_TX,		/* u32 */
 	DEVLINK_ATTR_SLICE_RATE_MAX_TX,		/* u32 */
+	DEVLINK_ATTR_SLICE_RATE_NODE_NAME,	/* string */
 
 	/* add new attributes above here, update the policy in devlink.c */
 
 	__DEVLINK_ATTR_MAX,
 	DEVLINK_ATTR_MAX = __DEVLINK_ATTR_MAX - 1
 };
+
+#define RATE_NODE_NAME_LEN 64
 
 /* Mapping between internal resource described by the field and system
  * structure

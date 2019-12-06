@@ -20,6 +20,7 @@
 #include <linux/workqueue.h>
 #include <linux/u64_stats_sync.h>
 #include <linux/timekeeping.h>
+#include <linux/ctype.h>
 #include <rdma/ib_verbs.h>
 #include <net/netlink.h>
 #include <net/genetlink.h>
@@ -50,6 +51,8 @@ struct devlink_slice_rate {
 	struct devlink_slice *devlink_slice;
 	struct list_head list;
 	void *priv;
+	priv_destructor_t priv_destructor;
+	char name[RATE_NODE_NAME_LEN];
 };
 
 static struct devlink_dpipe_field devlink_dpipe_fields_ethernet[] = {
@@ -258,6 +261,55 @@ devlink_slice_rate_leaf_get_from_info(struct devlink *devlink,
 	return devlink_rate ?: ERR_PTR(-ENODEV);
 }
 
+static struct devlink_slice_rate *
+devlink_slice_rate_get_node_by_name(struct devlink *devlink,
+				    const char *node_name)
+{
+	static struct devlink_slice_rate *slice_rate;
+
+	list_for_each_entry(slice_rate, &devlink->slice_rate_list, list) {
+		if (!strcmp(node_name, slice_rate->name))
+			return slice_rate;
+	}
+	return ERR_PTR(-ENODEV);
+}
+
+static struct devlink_slice_rate *
+devlink_slice_rate_node_get_from_attrs(struct devlink *devlink,
+				       struct nlattr **attrs)
+{
+	const char *rate_node_name;
+
+	if (!attrs[DEVLINK_ATTR_SLICE_RATE_NODE_NAME])
+		return ERR_PTR(-EINVAL);
+	rate_node_name = nla_data(attrs[DEVLINK_ATTR_SLICE_RATE_NODE_NAME]);
+	if (!*rate_node_name || !isalpha(rate_node_name[0]))
+		return ERR_PTR(-EINVAL);
+
+	return devlink_slice_rate_get_node_by_name(devlink, rate_node_name);
+}
+
+static struct devlink_slice_rate *
+devlink_slice_rate_node_get_from_info(struct devlink *devlink,
+				      struct genl_info *info)
+{
+	return devlink_slice_rate_node_get_from_attrs(devlink, info->attrs);
+}
+
+static struct devlink_slice_rate *
+devlink_slice_rate_or_node_get(struct devlink *devlink,
+			       struct genl_info *info)
+{
+	struct nlattr **attrs = info->attrs;
+
+	if (attrs[DEVLINK_ATTR_SLICE_INDEX])
+		return devlink_slice_rate_leaf_get_from_info(devlink, info);
+	else if (attrs[DEVLINK_ATTR_SLICE_RATE_NODE_NAME])
+		return devlink_slice_rate_node_get_from_info(devlink, info);
+	else
+		return ERR_PTR(-EINVAL);
+}
+
 struct devlink_sb {
 	struct list_head list;
 	unsigned int index;
@@ -463,6 +515,7 @@ devlink_region_snapshot_get_by_id(struct devlink_region *region, u32 id)
 #define DEVLINK_NL_FLAG_NEED_SB		BIT(2)
 #define DEVLINK_NL_FLAG_NEED_SLICE       BIT(3)
 #define DEVLINK_NL_FLAG_NEED_SLICE_RATE	BIT(4)
+#define DEVLINK_NL_FLAG_NEED_SLICE_RATE_NODE BIT(5)
 
 /* The per devlink instance lock is taken by default in the pre-doit
  * operation, yet several commands do not require this. The global
@@ -507,13 +560,23 @@ static int devlink_nl_pre_doit(const struct genl_ops *ops,
 	} else if (ops->internal_flags & DEVLINK_NL_FLAG_NEED_SLICE_RATE) {
 		struct devlink_slice_rate *devlink_rate;
 
-		devlink_rate = devlink_slice_rate_leaf_get_from_info(devlink,
-								     info);
+		devlink_rate = devlink_slice_rate_or_node_get(devlink, info);
 		if (IS_ERR(devlink_rate)) {
 			err = PTR_ERR(devlink_rate);
 			goto unlock;
 		}
 		info->user_ptr[0] = devlink_rate;
+	} else if (ops->internal_flags &
+		   DEVLINK_NL_FLAG_NEED_SLICE_RATE_NODE) {
+		struct devlink_slice_rate *rate_node;
+
+		rate_node = devlink_slice_rate_node_get_from_info(devlink,
+								  info);
+		if (IS_ERR(rate_node)) {
+			err = PTR_ERR(rate_node);
+			goto unlock;
+		}
+		info->user_ptr[0] = rate_node;
 	}
 	if (ops->internal_flags & DEVLINK_NL_FLAG_NEED_SB) {
 		struct devlink_sb *devlink_sb;
@@ -825,12 +888,17 @@ static int devlink_nl_slice_rate_fill(struct sk_buff *msg,
 
 	if (devlink_nl_put_handle(msg, devlink))
 		goto nla_put_failure;
-	if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_INDEX,
-			devlink_rate->devlink_slice->index))
-		goto nla_put_failure;
 
-	if (nla_put_u16(msg, DEVLINK_ATTR_SLICE_RATE_TYPE,
-			DEVLINK_SLICE_RATE_TYPE_LEAF))
+	if (devlink_rate->type == DEVLINK_SLICE_RATE_TYPE_LEAF) {
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_INDEX,
+				devlink_rate->devlink_slice->index))
+			goto nla_put_failure;
+	} else if (devlink_rate->type == DEVLINK_SLICE_RATE_TYPE_NODE) {
+		if (nla_put_string(msg, DEVLINK_ATTR_SLICE_RATE_NODE_NAME,
+				   devlink_rate->name))
+			goto nla_put_failure;
+	}
+	if (nla_put_u16(msg, DEVLINK_ATTR_SLICE_RATE_TYPE, devlink_rate->type))
 		goto nla_put_failure;
 
 	if (ops->rate_min_tx_get) {
@@ -1320,6 +1388,83 @@ static int devlink_nl_cmd_slice_rate_set_doit(struct sk_buff *skb,
 					nla_min_tx_rate, nla_max_tx_rate);
 
 	return err;
+}
+
+static int devlink_nl_cmd_slice_rate_new_doit(struct sk_buff *skb,
+					      struct genl_info *info)
+{
+	struct devlink *devlink = info->user_ptr[0];
+	struct devlink_slice_rate *devlink_node;
+	const struct devlink_ops *ops;
+	int err;
+
+	if (!info->attrs[DEVLINK_ATTR_SLICE_RATE_NODE_NAME])
+		return -EINVAL;
+
+	devlink_node = kzalloc(sizeof(*devlink_node), GFP_KERNEL);
+	if (!devlink_node)
+		return -ENOMEM;
+
+	devlink_node->devlink = devlink;
+	nla_strlcpy(devlink_node->name,
+		    info->attrs[DEVLINK_ATTR_SLICE_RATE_NODE_NAME],
+		    RATE_NODE_NAME_LEN);
+	if (!*devlink_node->name)
+		return -EINVAL;
+
+	if (!IS_ERR(devlink_slice_rate_get_node_by_name(devlink,
+							devlink_node->name))) {
+		err = -EEXIST;
+		goto out_free_devlink_node;
+	}
+
+	ops = devlink->ops;
+	if (!ops || !ops->rate_node_new) {
+		err = -EOPNOTSUPP;
+		goto out_free_devlink_node;
+	}
+	err = ops->rate_node_new(devlink_node, info->extack);
+	if (err)
+		goto out_free_devlink_node;
+
+	devlink_node->type = DEVLINK_SLICE_RATE_TYPE_NODE;
+	list_add(&devlink_node->list, &devlink->slice_rate_list);
+	devlink_slice_rate_notify(devlink_node, DEVLINK_CMD_SLICE_RATE_NEW);
+
+	return 0;
+
+out_free_devlink_node:
+	kfree(devlink_node);
+	return err;
+}
+
+static int
+devlink_slice_rate_node_del(struct devlink_slice_rate *devlink_node,
+			    struct netlink_ext_ack *extack)
+{
+	struct devlink *devlink = devlink_node->devlink;
+	const struct devlink_ops *ops;
+	int err;
+
+	ops = devlink->ops;
+	if (!ops || !ops->rate_node_del)
+		return -EOPNOTSUPP;
+
+	devlink_slice_rate_notify(devlink_node, DEVLINK_CMD_SLICE_RATE_DEL);
+	err = ops->rate_node_del(devlink_node, extack);
+	list_del(&devlink_node->list);
+	if (devlink_node->priv_destructor)
+		devlink_node->priv_destructor(devlink_node->priv);
+	kfree(devlink_node);
+	return err;
+}
+
+static int devlink_nl_cmd_slice_rate_del_doit(struct sk_buff *skb,
+					      struct genl_info *info)
+{
+	struct devlink_slice_rate *devlink_node = info->user_ptr[0];
+
+	return devlink_slice_rate_node_del(devlink_node, info->extack);
 }
 
 static int devlink_nl_sb_fill(struct sk_buff *msg, struct devlink *devlink,
@@ -6441,6 +6586,8 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_SLICE_RATE_TYPE] = { .type = NLA_U16 },
 	[DEVLINK_ATTR_SLICE_RATE_MIN_TX] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_SLICE_RATE_MAX_TX] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_RATE_NODE_NAME] = { .type = NLA_NUL_STRING,
+						.len = RATE_NODE_NAME_LEN },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
@@ -6492,6 +6639,18 @@ static const struct genl_ops devlink_nl_ops[] = {
 		.doit = devlink_nl_cmd_slice_rate_set_doit,
 		.flags = GENL_ADMIN_PERM,
 		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE_RATE,
+	},
+	{
+		.cmd = DEVLINK_CMD_SLICE_RATE_NEW,
+		.doit = devlink_nl_cmd_slice_rate_new_doit,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = DEVLINK_NL_FLAG_NEED_DEVLINK,
+	},
+	{
+		.cmd = DEVLINK_CMD_SLICE_RATE_DEL,
+		.doit = devlink_nl_cmd_slice_rate_del_doit,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE_RATE_NODE,
 	},
 	{
 		.cmd = DEVLINK_CMD_PORT_SPLIT,
@@ -7301,11 +7460,38 @@ void *devlink_slice_priv(struct devlink_slice *devlink_slice)
 }
 EXPORT_SYMBOL_GPL(devlink_slice_priv);
 
+struct devlink *
+devlink_slice_rate_to_devlink(struct devlink_slice_rate *devlink_rate)
+{
+	return devlink_rate->devlink;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_to_devlink);
+
 void *devlink_slice_rate_priv(struct devlink_slice_rate *devlink_rate)
 {
 	return devlink_rate->priv;
 }
 EXPORT_SYMBOL_GPL(devlink_slice_rate_priv);
+
+void devlink_slice_rate_set_priv(struct devlink_slice_rate *devlink_rate,
+				 void *priv, priv_destructor_t destructor)
+{
+	devlink_rate->priv = priv;
+	devlink_rate->priv_destructor = destructor;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_set_priv);
+
+bool devlink_slice_rate_is_leaf(const struct devlink_slice_rate *slice_rate)
+{
+	return slice_rate->type == DEVLINK_SLICE_RATE_TYPE_LEAF;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_is_leaf);
+
+bool devlink_slice_rate_is_node(const struct devlink_slice_rate *slice_rate)
+{
+	return slice_rate->type == DEVLINK_SLICE_RATE_TYPE_NODE;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_is_node);
 
 /**
  *	devlink_slice_create - create devlink slice
@@ -7452,6 +7638,31 @@ void devlink_slice_rate_leaf_destroy(struct devlink_slice_rate *devlink_rate)
 	kfree(devlink_rate);
 }
 EXPORT_SYMBOL_GPL(devlink_slice_rate_leaf_destroy);
+
+/**
+ *	devlink_slice_rate_node_destroy_all - destroy all nodes on devlink
+ *
+ *	@devlink: devlink
+ */
+void devlink_slice_rate_node_destroy_all(struct devlink *devlink)
+{
+	static struct devlink_slice_rate *devlink_rate, *tmp;
+
+	mutex_lock(&devlink->lock);
+	list_for_each_entry_safe(devlink_rate, tmp, &devlink->slice_rate_list,
+				 list) {
+		if (devlink_rate->type == DEVLINK_SLICE_RATE_TYPE_LEAF)
+			continue;
+		devlink_slice_rate_notify(devlink_rate,
+					  DEVLINK_CMD_SLICE_RATE_DEL);
+		list_del(&devlink_rate->list);
+		if (devlink_rate->priv_destructor)
+			devlink_rate->priv_destructor(devlink_rate->priv);
+		kfree(devlink_rate);
+	}
+	mutex_unlock(&devlink->lock);
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_node_destroy_all);
 
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,

@@ -830,6 +830,10 @@ struct devlink_ops {
 			       struct netlink_ext_ack *extack);
 	int (*rate_max_tx_get)(struct devlink_slice_rate *slice_rate,
 			       struct netlink_ext_ack *extack);
+	int (*rate_node_new)(struct devlink_slice_rate *slice_node,
+			     struct netlink_ext_ack *extack);
+	int (*rate_node_del)(struct devlink_slice_rate *slice_node,
+			     struct netlink_ext_ack *extack);
 };
 
 struct devlink_slice_ops {
@@ -918,11 +922,19 @@ void devlink_slice_attrs_pci_pf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf);
 void devlink_slice_attrs_pci_vf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf, u16 vf);
+struct devlink *
+devlink_slice_rate_to_devlink(struct devlink_slice_rate *devlink_rate);
 void *devlink_slice_rate_priv(struct devlink_slice_rate *devlink_rate);
+typedef void (*priv_destructor_t)(void *priv);
+void devlink_slice_rate_set_priv(struct devlink_slice_rate *devlink_rate,
+				 void *priv, priv_destructor_t destructor);
 struct devlink_slice_rate *
 devlink_slice_rate_leaf_create(struct devlink_slice *devlink_slice,
 			       void *priv);
 void devlink_slice_rate_leaf_destroy(struct devlink_slice_rate *devlink_rate);
+void devlink_slice_rate_node_destroy_all(struct devlink *devlink);
+bool devlink_slice_rate_is_leaf(const struct devlink_slice_rate *slice_rate);
+bool devlink_slice_rate_is_node(const struct devlink_slice_rate *slice_rate);
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,
 			u16 egress_pools_count, u16 ingress_tc_count,
