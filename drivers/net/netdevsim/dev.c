@@ -607,48 +607,127 @@ nsim_dev_devlink_trap_action_set(struct devlink *devlink,
 	return 0;
 }
 
+struct nsim_slice_rate_group {
+	int min_tx_rate;
+	int max_tx_rate;
+};
+
 static int nsim_rate_min_tx_set(struct devlink_slice_rate *devlink_rate,
 				int min_tx_rate,
 				struct netlink_ext_ack *extack)
 {
-	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
-	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
-	int slice_index = nsim_slice->slice_index;
+	if (devlink_slice_rate_is_leaf(devlink_rate)) {
+		struct nsim_bus_dev *nsim_bus_dev;
+		struct nsim_slice *nsim_slice;
+		int slice_index;
 
-	nsim_bus_dev->vfconfigs[slice_index].min_tx_rate = min_tx_rate;
+		nsim_slice = devlink_slice_rate_priv(devlink_rate);
+		nsim_bus_dev = nsim_slice->nsim_bus_dev;
+		slice_index = nsim_slice->slice_index;
+		nsim_bus_dev->vfconfigs[slice_index].min_tx_rate = min_tx_rate;
+	} else if (devlink_slice_rate_is_node(devlink_rate)) {
+		struct nsim_slice_rate_group *nsim_group;
+
+		nsim_group = devlink_slice_rate_priv(devlink_rate);
+		nsim_group->min_tx_rate = min_tx_rate;
+	}
+
 	return 0;
 }
 
 static int nsim_rate_min_tx_get(struct devlink_slice_rate *devlink_rate,
 				struct netlink_ext_ack *extack)
 {
-	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
-	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
-	int slice_index = nsim_slice->slice_index;
+	int rate = 0;
 
-	return nsim_bus_dev->vfconfigs[slice_index].min_tx_rate;
+	if (devlink_slice_rate_is_leaf(devlink_rate)) {
+		struct nsim_bus_dev *nsim_bus_dev;
+		struct nsim_slice *nsim_slice;
+		int slice_index;
+
+		nsim_slice = devlink_slice_rate_priv(devlink_rate);
+		nsim_bus_dev = nsim_slice->nsim_bus_dev;
+		slice_index = nsim_slice->slice_index;
+		rate = nsim_bus_dev->vfconfigs[slice_index].min_tx_rate;
+	} else if (devlink_slice_rate_is_node(devlink_rate)) {
+		struct nsim_slice_rate_group *nsim_group;
+
+		nsim_group = devlink_slice_rate_priv(devlink_rate);
+		rate = nsim_group->min_tx_rate;
+	}
+
+	return rate;
 }
 
 static int nsim_rate_max_tx_set(struct devlink_slice_rate *devlink_rate,
 				int max_tx_rate,
 				struct netlink_ext_ack *extack)
 {
-	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
-	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
-	int slice_index = nsim_slice->slice_index;
+	if (devlink_slice_rate_is_leaf(devlink_rate)) {
+		struct nsim_bus_dev *nsim_bus_dev;
+		struct nsim_slice *nsim_slice;
+		int slice_index;
 
-	nsim_bus_dev->vfconfigs[slice_index].max_tx_rate = max_tx_rate;
+		nsim_slice = devlink_slice_rate_priv(devlink_rate);
+		nsim_bus_dev = nsim_slice->nsim_bus_dev;
+		slice_index = nsim_slice->slice_index;
+		nsim_bus_dev->vfconfigs[slice_index].max_tx_rate = max_tx_rate;
+	} else if (devlink_slice_rate_is_node(devlink_rate)) {
+		struct nsim_slice_rate_group *nsim_group;
+
+		nsim_group = devlink_slice_rate_priv(devlink_rate);
+		nsim_group->max_tx_rate = max_tx_rate;
+	}
+
 	return 0;
 }
 
 static int nsim_rate_max_tx_get(struct devlink_slice_rate *devlink_rate,
 				struct netlink_ext_ack *extack)
 {
-	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
-	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
-	int slice_index = nsim_slice->slice_index;
+	int rate = 0;
 
-	return nsim_bus_dev->vfconfigs[slice_index].max_tx_rate;
+	if (devlink_slice_rate_is_leaf(devlink_rate)) {
+		struct nsim_bus_dev *nsim_bus_dev;
+		struct nsim_slice *nsim_slice;
+		int slice_index;
+
+		nsim_slice = devlink_slice_rate_priv(devlink_rate);
+		nsim_bus_dev = nsim_slice->nsim_bus_dev;
+		slice_index = nsim_slice->slice_index;
+		rate = nsim_bus_dev->vfconfigs[slice_index].max_tx_rate;
+	} else if (devlink_slice_rate_is_node(devlink_rate)) {
+		struct nsim_slice_rate_group *nsim_group;
+
+		nsim_group = devlink_slice_rate_priv(devlink_rate);
+		rate = nsim_group->max_tx_rate;
+	}
+
+	return rate;
+}
+
+static void nsim_rate_group_destructor(void *priv)
+{
+	kfree(priv);
+}
+
+static int nsim_rate_group_new(struct devlink_slice_rate *group,
+			       struct netlink_ext_ack *extack)
+{
+	struct nsim_slice_rate_group *nsim_group;
+
+	nsim_group = kzalloc(sizeof(*nsim_group), GFP_KERNEL);
+	if (!nsim_group)
+		return -ENOMEM;
+	devlink_slice_rate_set_priv(group, nsim_group,
+				    nsim_rate_group_destructor);
+	return 0;
+}
+
+static int nsim_rate_group_del(struct devlink_slice_rate *group,
+			       struct netlink_ext_ack *extack)
+{
+	return 0;
 }
 
 static const struct devlink_ops nsim_dev_devlink_ops = {
@@ -662,6 +741,8 @@ static const struct devlink_ops nsim_dev_devlink_ops = {
 	.rate_min_tx_get = nsim_rate_min_tx_get,
 	.rate_max_tx_set = nsim_rate_max_tx_set,
 	.rate_max_tx_get = nsim_rate_max_tx_get,
+	.rate_node_new = nsim_rate_group_new,
+	.rate_node_del = nsim_rate_group_del,
 };
 
 #define NSIM_DEV_MAX_MACS_DEFAULT 32

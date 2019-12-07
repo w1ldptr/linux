@@ -109,6 +109,7 @@ err_slices_destroy:
 
 void nsim_dev_slices_destroy(struct nsim_dev *nsim_dev)
 {
+	struct devlink *devlink = priv_to_devlink(nsim_dev);
 	int vf;
 
 	for (vf = 0; vf < nsim_dev->nsim_bus_dev->max_vfs; vf++) {
@@ -117,5 +118,6 @@ void nsim_dev_slices_destroy(struct nsim_dev *nsim_dev)
 		devlink_slice_rate_leaf_destroy(nsim_slice->devlink_rate);
 		devlink_slice_destroy(nsim_slice->devlink_slice);
 	}
+	devlink_slice_rate_node_destroy_all(devlink);
 }
 
