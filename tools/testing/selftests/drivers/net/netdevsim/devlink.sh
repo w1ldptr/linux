@@ -502,6 +502,14 @@ slice_rate_leafs_get()
 	       '.[] | to_entries | .[] | select(.value.type == "leaf") | .key | select(contains("'$handle'"))'
 }
 
+slice_rate_nodes_get()
+{
+    local handle=$1
+
+    cmd_jq "devlink slice rate show -j" \
+	   '.[] | to_entries | .[] | select(.value.type == "node") | .key | select(contains("'$handle'"))'
+}
+
 slice_rate_attr_set()
 {
 	local handle=$1
@@ -509,6 +517,20 @@ slice_rate_attr_set()
 	local value=$3
 
 	devlink slice rate set $handle $name $value
+}
+
+slice_rate_node_add()
+{
+    local handle=$1
+
+    devlink slice rate add $handle
+}
+
+slice_rate_node_del()
+{
+    local handle=$1
+
+    devlink slice rate del $handle
 }
 
 slice_rate_attr_get()
@@ -551,6 +573,36 @@ slice_rate_test()
 	    check_err $? "Unexpected max_tx_rate attr value $value != $rate"
 	    i=$(($i+100))
 	done
+
+	local bus=$(echo $slice | cut -d '/' -f 1)
+	local dev=$(echo $slice | cut -d '/' -f 2)
+	local node1_name='group1'
+	local node1="$bus/$dev/$node1_name"
+	slice_rate_node_add "$node1"
+	local nodes=`slice_rate_nodes_get $DL_HANDLE`
+	local num_nodes=`echo $nodes | wc -w`
+	[ $num_nodes == 1 ]
+	check_err $? "Expected 1 rate node but got $num_nodes"
+
+	local node_min_rate=10
+	slice_rate_attr_set "$node1" min_tx_rate "$node_min_rate"
+	value=$(slice_rate_attr_get $node1 min_tx_rate)
+	check_err $? "Failed to get min_tx_rate attr value"
+	[ "$value" == "$node_min_rate" ]
+	check_err $? "Unexpected min_tx_rate attr value $value != $node_min_rate"
+
+	local node_max_rate=100
+	slice_rate_attr_set "$node1" max_tx_rate "$node_max_rate"
+	value=$(slice_rate_attr_get $node1 max_tx_rate)
+	check_err $? "Failed to get max_tx_rate attr value"
+	[ "$value" == "$node_max_rate" ]
+	check_err $? "Unexpected max_tx_rate attr value $value != $node_max_rate"
+
+	slice_rate_node_del "$node1"
+	local nodes=`slice_rate_nodes_get $DL_HANDLE`
+	local num_nodes=`echo $nodes | wc -w`
+	[ $num_nodes == 0 ]
+	check_err $? "Expected 0 rate node but got $num_nodes"
 
 	log_test "slice rate test"
 }
