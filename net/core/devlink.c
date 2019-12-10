@@ -49,6 +49,7 @@ struct devlink_slice_rate {
 	enum devlink_slice_rate_type type;
 	struct devlink *devlink;
 	struct devlink_slice *devlink_slice;
+	struct devlink_slice_rate *parent;
 	struct list_head list;
 	void *priv;
 	priv_destructor_t priv_destructor;
@@ -923,6 +924,11 @@ static int devlink_nl_slice_rate_fill(struct sk_buff *msg,
 			goto nla_put_failure;
 	}
 
+	if (devlink_rate->parent)
+		if (nla_put_string(msg, DEVLINK_ATTR_SLICE_RATE_PARENT,
+				   devlink_rate->parent->name))
+			goto nla_put_failure;
+
 	genlmsg_end(msg, hdr);
 	return 0;
 
@@ -1343,10 +1349,72 @@ static int devlink_nl_cmd_slice_rate_get_doit(struct sk_buff *skb,
 	return genlmsg_reply(msg, info);
 }
 
+static bool
+devlink_is_parent_node(struct devlink_slice_rate *devlink_rate,
+		       struct devlink_slice_rate *parent)
+{
+	while (parent) {
+		if (parent == devlink_rate)
+			return true;
+		parent = parent->parent;
+	}
+	return false;
+}
+
+static int
+devlink_nl_set_slice_rate_parent(struct devlink_slice_rate *devlink_rate,
+				 struct genl_info *info,
+				 struct nlattr *nla_parent)
+{
+	struct devlink *devlink = devlink_rate->devlink;
+	const char *parent_name = nla_data(nla_parent);
+	struct devlink_slice_rate *parent;
+	const struct devlink_ops *ops;
+	int err;
+
+	ops = devlink->ops;
+	if (!ops || !ops->rate_parent_set || !ops->rate_parent_unset)
+		return -EOPNOTSUPP;
+	if (devlink_slice_rate_is_node(devlink_rate) &&
+	    !strcmp(parent_name, devlink_rate->name))
+		return -EINVAL;
+
+	parent = devlink_rate->parent;
+	if (parent) {
+		if (!strcmp(parent_name, parent->name))
+			return 0;
+
+		err = ops->rate_parent_unset(devlink_rate, parent,
+					     info->extack);
+		if (err)
+			return err;
+		devlink_rate->parent = NULL;
+	}
+	if (!*parent_name)
+		return 0;
+
+	parent = devlink_slice_rate_get_node_by_name(devlink, parent_name);
+	if (IS_ERR(parent))
+		return PTR_ERR(parent);
+	if (devlink_slice_rate_is_node(devlink_rate) &&
+	    devlink_is_parent_node(devlink_rate, parent)) {
+		NL_SET_ERR_MSG_MOD(info->extack, "Group is already a parent of target parent group.");
+		return -EEXIST;
+	}
+
+	err = ops->rate_parent_set(devlink_rate, parent, info->extack);
+	if (err)
+		return err;
+
+	devlink_rate->parent = parent;
+	return 0;
+}
+
 static int devlink_nl_set_slice_rate(struct devlink_slice_rate *devlink_rate,
 				     struct genl_info *info,
 				     struct nlattr *nla_min_tx_rate,
-				     struct nlattr *nla_max_tx_rate)
+				     struct nlattr *nla_max_tx_rate,
+				     struct nlattr *nla_parent)
 {
 	struct devlink *devlink = devlink_rate->devlink;
 	const struct devlink_ops *ops = devlink->ops;
@@ -1372,20 +1440,29 @@ static int devlink_nl_set_slice_rate(struct devlink_slice_rate *devlink_rate,
 			return err;
 	}
 
+	if (nla_parent) {
+		err = devlink_nl_set_slice_rate_parent(devlink_rate, info,
+						       nla_parent);
+		if (err)
+			return err;
+	}
+
 	return 0;
 }
 
 static int devlink_nl_cmd_slice_rate_set_doit(struct sk_buff *skb,
 					      struct genl_info *info)
 {
+	struct nlattr *nla_min_tx_rate, *nla_max_tx_rate, *nla_parent;
 	struct devlink_slice_rate *devlink_rate = info->user_ptr[0];
-	struct nlattr *nla_min_tx_rate, *nla_max_tx_rate;
 	int err;
 
 	nla_min_tx_rate = info->attrs[DEVLINK_ATTR_SLICE_RATE_MIN_TX];
 	nla_max_tx_rate = info->attrs[DEVLINK_ATTR_SLICE_RATE_MAX_TX];
+	nla_parent = info->attrs[DEVLINK_ATTR_SLICE_RATE_PARENT];
 	err = devlink_nl_set_slice_rate(devlink_rate, info,
-					nla_min_tx_rate, nla_max_tx_rate);
+					nla_min_tx_rate, nla_max_tx_rate,
+					nla_parent);
 
 	return err;
 }
@@ -1463,6 +1540,28 @@ static int devlink_nl_cmd_slice_rate_del_doit(struct sk_buff *skb,
 					      struct genl_info *info)
 {
 	struct devlink_slice_rate *devlink_node = info->user_ptr[0];
+	struct devlink *devlink = devlink_node->devlink;
+	struct devlink_slice_rate *devlink_rate;
+	const struct devlink_ops *ops;
+	int err;
+
+	ops = devlink->ops;
+	if (!ops || !ops->rate_node_del)
+		return -EOPNOTSUPP;
+
+	list_for_each_entry(devlink_rate, &devlink->slice_rate_list, list) {
+		if (devlink_rate->parent != devlink_node)
+			continue;
+
+		if (ops->rate_parent_unset) {
+			err = ops->rate_parent_unset(devlink_rate,
+						     devlink_node,
+						     info->extack);
+			if (err)
+				return err;
+		}
+		devlink_rate->parent = NULL;
+	}
 
 	return devlink_slice_rate_node_del(devlink_node, info->extack);
 }
@@ -6588,6 +6687,8 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_SLICE_RATE_MAX_TX] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_SLICE_RATE_NODE_NAME] = { .type = NLA_NUL_STRING,
 						.len = RATE_NODE_NAME_LEN },
+	[DEVLINK_ATTR_SLICE_RATE_PARENT] = { .type = NLA_NUL_STRING,
+					     .len = RATE_NODE_NAME_LEN },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
@@ -7651,8 +7752,10 @@ void devlink_slice_rate_node_destroy_all(struct devlink *devlink)
 	mutex_lock(&devlink->lock);
 	list_for_each_entry_safe(devlink_rate, tmp, &devlink->slice_rate_list,
 				 list) {
-		if (devlink_rate->type == DEVLINK_SLICE_RATE_TYPE_LEAF)
+		if (devlink_rate->type == DEVLINK_SLICE_RATE_TYPE_LEAF) {
+			devlink_rate->parent = NULL;
 			continue;
+		}
 		devlink_slice_rate_notify(devlink_rate,
 					  DEVLINK_CMD_SLICE_RATE_DEL);
 		list_del(&devlink_rate->list);

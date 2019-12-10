@@ -457,6 +457,7 @@ enum devlink_attr {
 	DEVLINK_ATTR_SLICE_RATE_MIN_TX,		/* u32 */
 	DEVLINK_ATTR_SLICE_RATE_MAX_TX,		/* u32 */
 	DEVLINK_ATTR_SLICE_RATE_NODE_NAME,	/* string */
+	DEVLINK_ATTR_SLICE_RATE_PARENT,	/* string */
 
 	/* add new attributes above here, update the policy in devlink.c */
 

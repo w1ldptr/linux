@@ -834,6 +834,12 @@ struct devlink_ops {
 			     struct netlink_ext_ack *extack);
 	int (*rate_node_del)(struct devlink_slice_rate *slice_node,
 			     struct netlink_ext_ack *extack);
+	int (*rate_parent_set)(struct devlink_slice_rate *child,
+			       struct devlink_slice_rate *parent,
+			       struct netlink_ext_ack *extack);
+	int (*rate_parent_unset)(struct devlink_slice_rate *child,
+				 struct devlink_slice_rate *parent,
+				 struct netlink_ext_ack *extack);
 };
 
 struct devlink_slice_ops {
