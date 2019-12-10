@@ -730,6 +730,20 @@ static int nsim_rate_group_del(struct devlink_slice_rate *group,
 	return 0;
 }
 
+static int nsim_rate_parent_set(struct devlink_slice_rate *devlink_rate,
+				struct devlink_slice_rate *parent,
+				struct netlink_ext_ack *extack)
+{
+	return 0;
+}
+
+static int nsim_rate_parent_unset(struct devlink_slice_rate *devlink_rate,
+				  struct devlink_slice_rate *parent,
+				  struct netlink_ext_ack *extack)
+{
+	return 0;
+}
+
 static const struct devlink_ops nsim_dev_devlink_ops = {
 	.reload_down = nsim_dev_reload_down,
 	.reload_up = nsim_dev_reload_up,
@@ -743,6 +757,8 @@ static const struct devlink_ops nsim_dev_devlink_ops = {
 	.rate_max_tx_get = nsim_rate_max_tx_get,
 	.rate_node_new = nsim_rate_group_new,
 	.rate_node_del = nsim_rate_group_del,
+	.rate_parent_set = nsim_rate_parent_set,
+	.rate_parent_unset = nsim_rate_parent_unset,
 };
 
 #define NSIM_DEV_MAX_MACS_DEFAULT 32
