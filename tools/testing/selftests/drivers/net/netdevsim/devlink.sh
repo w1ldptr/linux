@@ -604,6 +604,26 @@ slice_rate_test()
 	[ $num_nodes == 0 ]
 	check_err $? "Expected 0 rate node but got $num_nodes"
 
+	local bus=$(echo $slice | cut -d '/' -f 1)
+	local dev=$(echo $slice | cut -d '/' -f 2)
+	local node1_name='group1'
+	local node1="$bus/$dev/$node1_name"
+	slice_rate_node_add "$node1"
+	slice_rate_attr_set "$slice" parent "$node1_name"
+	value=$(slice_rate_attr_get $slice parent)
+	check_err $? "Failed to get parent attr value"
+	[ "$value" == "$node1_name" ]
+	check_err $? "Unexpected parent attr value $value != $node1_name"
+
+	local node2_name='group2'
+	local node2="$bus/$dev/$node2_name"
+	slice_rate_node_add "$node2"
+	slice_rate_attr_set "$node2" parent "$node1_name"
+	value=$(slice_rate_attr_get $node2 parent)
+	check_err $? "Failed to get parent attr value"
+	[ "$value" == "$node1_name" ]
+	check_err $? "Unexpected parent attr value $value != $node1_name"
+
 	log_test "slice rate test"
 }
 
