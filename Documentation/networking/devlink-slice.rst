@@ -115,6 +115,9 @@ attributes:
 
   * ``hw_addr``: The HW addr of the network device.
   * ``port_index``: The ``devlink-port`` index associated with the device.
+  * ``rate``: The rate object of the slice. Can be used to control min/max tx
+    rate of individual slices or to group them by attaching to rate nodes with
+    per-node rate limits.
 
 Testing
 =======
