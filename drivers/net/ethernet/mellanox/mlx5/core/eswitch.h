@@ -152,6 +152,7 @@ struct mlx5_vport {
 	bool                    enabled;
 	enum mlx5_eswitch_vport_event enabled_events;
 	struct devlink_slice     *devlink_slice;
+	struct devlink_slice_rate *devlink_rate;
 };
 
 enum offloads_fdb_flags {
@@ -302,6 +303,10 @@ int mlx5_eswitch_set_vport_trust(struct mlx5_eswitch *esw,
 				 u16 vport_num, bool setting);
 int mlx5_eswitch_set_vport_rate(struct mlx5_eswitch *esw, u16 vport,
 				u32 max_rate, u32 min_rate);
+int mlx5_eswitch_set_vport_min_rate(struct mlx5_eswitch *esw, u16 vport,
+				    u32 min_rate, struct netlink_ext_ack *extack);
+int mlx5_eswitch_set_vport_max_rate(struct mlx5_eswitch *esw, u16 vport,
+				    u32 max_rate, struct netlink_ext_ack *extack);
 int mlx5_eswitch_set_vepa(struct mlx5_eswitch *esw, u8 setting);
 int mlx5_eswitch_get_vepa(struct mlx5_eswitch *esw, u8 *setting);
 int mlx5_eswitch_get_vport_config(struct mlx5_eswitch *esw,

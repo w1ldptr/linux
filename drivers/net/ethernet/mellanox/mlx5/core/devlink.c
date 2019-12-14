@@ -101,6 +101,57 @@ static int mlx5_devlink_reload_up(struct devlink *devlink,
 	return mlx5_load_one(dev, false);
 }
 
+#ifdef CONFIG_MLX5_ESWITCH
+
+static int mlx5_devlink_rate_min_tx_set(struct devlink_slice_rate *devlink_slice_rate,
+					int min_tx_rate, struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+
+	return mlx5_eswitch_set_vport_min_rate(vport->dev->priv.eswitch,
+					       vport->vport, min_tx_rate, extack);
+}
+
+static int mlx5_devlink_rate_min_tx_get(struct devlink_slice_rate *devlink_slice_rate,
+					struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+	struct ifla_vf_info ivi;
+	int err;
+
+	err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
+					    vport->vport, &ivi, extack);
+	if (err)
+		return err;
+	return ivi.min_tx_rate;
+}
+
+static int mlx5_devlink_rate_max_tx_set(struct devlink_slice_rate *devlink_slice_rate,
+					int max_tx_rate, struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+
+	return mlx5_eswitch_set_vport_max_rate(vport->dev->priv.eswitch,
+					       vport->vport, max_tx_rate,
+					       extack);
+}
+
+static int mlx5_devlink_rate_max_tx_get(struct devlink_slice_rate *devlink_slice_rate,
+					struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+	struct ifla_vf_info ivi;
+	int err;
+
+	err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
+					    vport->vport, &ivi, extack);
+	if (err)
+		return err;
+	return ivi.max_tx_rate;
+}
+
+#endif
+
 static const struct devlink_ops mlx5_devlink_ops = {
 #ifdef CONFIG_MLX5_ESWITCH
 	.eswitch_mode_set = mlx5_devlink_eswitch_mode_set,
@@ -109,6 +160,10 @@ static const struct devlink_ops mlx5_devlink_ops = {
 	.eswitch_inline_mode_get = mlx5_devlink_eswitch_inline_mode_get,
 	.eswitch_encap_mode_set = mlx5_devlink_eswitch_encap_mode_set,
 	.eswitch_encap_mode_get = mlx5_devlink_eswitch_encap_mode_get,
+	.rate_min_tx_set = mlx5_devlink_rate_min_tx_set,
+	.rate_min_tx_get = mlx5_devlink_rate_min_tx_get,
+	.rate_max_tx_set = mlx5_devlink_rate_max_tx_set,
+	.rate_max_tx_get = mlx5_devlink_rate_max_tx_get,
 #endif
 	.flash_update = mlx5_devlink_flash_update,
 	.info_get = mlx5_devlink_info_get,
@@ -313,6 +368,7 @@ int mlx5_devlink_slices_create(struct mlx5_eswitch *esw)
 	int i;
 
 	mlx5_esw_for_all_vports(esw, i, vport) {
+		struct devlink_slice_rate *devlink_rate;
 		struct devlink_slice *devlink_slice;
 		struct devlink_slice_attrs attrs;
 		int slice_idx;
@@ -341,6 +397,16 @@ int mlx5_devlink_slices_create(struct mlx5_eswitch *esw)
 			goto err_dl_destroy;
 		}
 		vport->devlink_slice = devlink_slice;
+
+		if (mlx5_eswitch_is_vf_vport(esw, vport->vport)) {
+			devlink_rate = devlink_slice_rate_leaf_create(devlink_slice,
+								      vport);
+			if (IS_ERR(devlink_rate)) {
+				err = PTR_ERR(devlink_rate);
+				goto err_dl_destroy;
+			}
+			vport->devlink_rate = devlink_rate;
+		}
 	}
 
 	return 0;
@@ -356,6 +422,8 @@ void mlx5_devlink_slices_destroy(struct mlx5_eswitch *esw)
 	int i;
 
 	mlx5_esw_for_all_vports_reverse(esw, i, vport) {
+		if (vport->devlink_rate)
+			devlink_slice_rate_leaf_destroy(vport->devlink_rate);
 		if (vport->devlink_slice)
 			devlink_slice_destroy(vport->devlink_slice);
 	}
