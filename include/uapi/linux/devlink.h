@@ -441,7 +441,7 @@ enum devlink_attr {
 	DEVLINK_ATTR_SLICE_FLAVOUR,             /* u16 */
 	DEVLINK_ATTR_SLICE_PF_INDEX,            /* u32 */
 	DEVLINK_ATTR_SLICE_VF_INDEX,            /* u32 */
-
+	DEVLINK_ATTR_SLICE_HW_ADDR,             /* binary */
 
 	/* add new attributes above here, update the policy in devlink.c */
 

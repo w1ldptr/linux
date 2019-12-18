@@ -711,10 +711,13 @@ static void devlink_port_notify(struct devlink_port *devlink_port,
 static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
 				 struct devlink_slice *devlink_slice,
 				 enum devlink_command cmd, u32 sliceid,
-				 u32 seq, int flags)
+				 u32 seq, int flags,
+				 struct netlink_ext_ack *extack)
 {
 	struct devlink_slice_attrs *attrs = &devlink_slice->attrs;
+	const struct devlink_slice_ops *ops = devlink_slice->ops;
 	void *hdr;
+	int err;
 
 	hdr = genlmsg_put(msg, sliceid, seq, &devlink_nl_family, flags, cmd);
 	if (!hdr)
@@ -748,6 +751,19 @@ static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
 		    devlink_slice->devlink_port->index))
 			goto nla_put_failure;
 
+	if (ops && ops->hw_addr_get) {
+		u8 hw_addr[MAX_ADDR_LEN];
+
+		err = ops->hw_addr_get(devlink_slice, hw_addr, extack);
+		if (err) {
+			genlmsg_cancel(msg, hdr);
+			return err;
+		}
+		if (nla_put(msg, DEVLINK_ATTR_SLICE_HW_ADDR,
+			    ops->hw_addr_len, hw_addr))
+			goto nla_put_failure;
+	}
+
 	genlmsg_end(msg, hdr);
 	return 0;
 
@@ -769,8 +785,8 @@ static void devlink_slice_notify(struct devlink_slice *devlink_slice,
 	if (!msg)
 		return;
 
-	err = devlink_nl_slice_fill(msg, devlink,
-				    devlink_slice, cmd, 0, 0, 0);
+	err = devlink_nl_slice_fill(msg, devlink, devlink_slice, cmd,
+				    0, 0, 0, NULL);
 	if (err) {
 		nlmsg_free(msg);
 		return;
@@ -993,8 +1009,8 @@ static int devlink_nl_cmd_slice_get_doit(struct sk_buff *skb,
 		return -ENOMEM;
 
 	err = devlink_nl_slice_fill(msg, devlink, devlink_slice,
-				    DEVLINK_CMD_SLICE_NEW,
-				     info->snd_portid, info->snd_seq, 0);
+				    DEVLINK_CMD_SLICE_NEW, info->snd_portid,
+				    info->snd_seq, 0, info->extack);
 	if (err) {
 		nlmsg_free(msg);
 		return err;
@@ -1011,7 +1027,7 @@ static int devlink_nl_cmd_slice_get_dumpit(struct sk_buff *msg,
 	struct devlink *devlink;
 	int start = cb->args[0];
 	int idx = 0;
-	int err;
+	int err = 0;
 
 	mutex_lock(&devlink_mutex);
 	list_for_each_entry(devlink, &devlink_list, list) {
@@ -1030,7 +1046,7 @@ static int devlink_nl_cmd_slice_get_dumpit(struct sk_buff *msg,
 						    DEVLINK_CMD_NEW,
 						    NETLINK_CB(cb->skb).portid,
 						    cb->nlh->nlmsg_seq,
-						    NLM_F_MULTI);
+						    NLM_F_MULTI, NULL);
 			if (err) {
 				mutex_unlock(&devlink->lock);
 				goto out;
@@ -1041,6 +1057,8 @@ static int devlink_nl_cmd_slice_get_dumpit(struct sk_buff *msg,
 	}
 out:
 	mutex_unlock(&devlink_mutex);
+	if (err != -EMSGSIZE)
+		return err;
 
 	cb->args[0] = idx;
 	return msg->len;
@@ -6166,6 +6184,8 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_SLICE_FLAVOUR] = { .type = NLA_U16 },
 	[DEVLINK_ATTR_SLICE_PF_INDEX] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_SLICE_VF_INDEX] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_HW_ADDR] = { .type = NLA_BINARY,
+					.len = MAX_ADDR_LEN },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
