@@ -42,6 +42,7 @@
 #include "fs_core.h"
 #include "lib/devcom.h"
 #include "lib/eq.h"
+#include "devlink.h"
 
 /* There are two match-all miss flows, one for unicast dst mac and
  * one for multicast.
@@ -2241,6 +2242,10 @@ int esw_offloads_enable(struct mlx5_eswitch *esw)
 	if (err)
 		goto err_vports;
 
+	err = mlx5_devlink_slices_create(esw);
+	if (err)
+		goto err_slices;
+
 	err = esw_offloads_load_all_reps(esw);
 	if (err)
 		goto err_reps;
@@ -2251,6 +2256,8 @@ int esw_offloads_enable(struct mlx5_eswitch *esw)
 	return 0;
 
 err_reps:
+	mlx5_devlink_slices_destroy(esw);
+err_slices:
 	mlx5_eswitch_disable_pf_vf_vports(esw);
 err_vports:
 	esw_set_passing_vport_metadata(esw, false);
@@ -2284,6 +2291,7 @@ void esw_offloads_disable(struct mlx5_eswitch *esw)
 {
 	esw_offloads_devcom_cleanup(esw);
 	esw_offloads_unload_all_reps(esw);
+	mlx5_devlink_slices_destroy(esw);
 	mlx5_eswitch_disable_pf_vf_vports(esw);
 	esw_set_passing_vport_metadata(esw, false);
 	esw_offloads_steering_cleanup(esw);

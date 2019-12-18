@@ -4039,7 +4039,8 @@ int mlx5e_set_vf_mac(struct net_device *dev, int vf, u8 *mac)
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	struct mlx5_core_dev *mdev = priv->mdev;
 
-	return mlx5_eswitch_set_vport_mac(mdev->priv.eswitch, vf + 1, mac);
+	return mlx5_eswitch_set_vport_mac(mdev->priv.eswitch, vf + 1,
+					  mac, NULL);
 }
 
 static int mlx5e_set_vf_vlan(struct net_device *dev, int vf, u16 vlan, u8 qos,
@@ -4120,7 +4121,8 @@ int mlx5e_get_vf_config(struct net_device *dev,
 	struct mlx5_core_dev *mdev = priv->mdev;
 	int err;
 
-	err = mlx5_eswitch_get_vport_config(mdev->priv.eswitch, vf + 1, ivi);
+	err = mlx5_eswitch_get_vport_config(mdev->priv.eswitch, vf + 1,
+					    ivi, NULL);
 	if (err)
 		return err;
 	ivi->linkstate = mlx5_vport_link2ifla(ivi->linkstate);

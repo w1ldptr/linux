@@ -1851,9 +1851,11 @@ static int register_devlink_port(struct mlx5_core_dev *dev,
 				 struct mlx5e_rep_priv *rpriv)
 {
 	struct devlink *devlink = priv_to_devlink(dev);
+	struct devlink_slice *devlink_slice = NULL;
 	struct mlx5_eswitch_rep *rep = rpriv->rep;
 	struct netdev_phys_item_id ppid = {};
 	unsigned int dl_port_index = 0;
+	struct mlx5_vport *vport;
 
 	if (!is_devlink_port_supported(dev, rpriv))
 		return 0;
@@ -1871,6 +1873,8 @@ static int register_devlink_port(struct mlx5_core_dev *dev,
 					      &ppid.id[0], ppid.id_len,
 					      dev->pdev->devfn);
 		dl_port_index = rep->vport;
+		vport = mlx5_eswitch_get_vport(dev->priv.eswitch, rep->vport);
+		devlink_slice = vport->devlink_slice;
 	} else if (mlx5_eswitch_is_vf_vport(dev->priv.eswitch,
 					    rpriv->rep->vport)) {
 		devlink_port_attrs_pci_vf_set(&rpriv->dl_port,
@@ -1878,9 +1882,12 @@ static int register_devlink_port(struct mlx5_core_dev *dev,
 					      dev->pdev->devfn,
 					      rep->vport - 1);
 		dl_port_index = vport_to_devlink_port_index(dev, rep->vport);
+		vport = mlx5_eswitch_get_vport(dev->priv.eswitch, rep->vport);
+		devlink_slice = vport->devlink_slice;
 	}
 
-	return devlink_port_register(devlink, &rpriv->dl_port, dl_port_index);
+	return devlink_port_register_with_slice(devlink, &rpriv->dl_port,
+					       dl_port_index, devlink_slice);
 }
 
 static void unregister_devlink_port(struct mlx5_core_dev *dev,

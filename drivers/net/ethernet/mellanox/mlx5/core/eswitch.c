@@ -2175,7 +2175,8 @@ void mlx5_eswitch_cleanup(struct mlx5_eswitch *esw)
 
 /* Vport Administration */
 int mlx5_eswitch_set_vport_mac(struct mlx5_eswitch *esw,
-			       u16 vport, u8 mac[ETH_ALEN])
+			       u16 vport, u8 mac[ETH_ALEN],
+			       struct netlink_ext_ack *extack)
 {
 	struct mlx5_vport *evport = mlx5_eswitch_get_vport(esw, vport);
 	u64 node_guid;
@@ -2188,25 +2189,30 @@ int mlx5_eswitch_set_vport_mac(struct mlx5_eswitch *esw,
 
 	mutex_lock(&esw->state_lock);
 
-	if (evport->info.spoofchk && !is_valid_ether_addr(mac))
+	if (evport->info.spoofchk && !is_valid_ether_addr(mac)) {
 		mlx5_core_warn(esw->dev,
 			       "Set invalid MAC while spoofchk is on, vport(%d)\n",
 			       vport);
+		NL_SET_ERR_MSG_MOD(extack, "Set invalid MAC while spoofchk is on");
+	}
 
 	err = mlx5_modify_nic_vport_mac_address(esw->dev, vport, mac);
 	if (err) {
 		mlx5_core_warn(esw->dev,
 			       "Failed to mlx5_modify_nic_vport_mac vport(%d) err=(%d)\n",
 			       vport, err);
+		NL_SET_ERR_MSG_MOD(extack, "Failed to modify NIC vport");
 		goto unlock;
 	}
 
 	node_guid_gen_from_mac(&node_guid, mac);
 	err = mlx5_modify_nic_vport_node_guid(esw->dev, vport, node_guid);
-	if (err)
+	if (err) {
 		mlx5_core_warn(esw->dev,
 			       "Failed to set vport %d node guid, err = %d. RDMA_CM will not function properly for this VF.\n",
 			       vport, err);
+		NL_SET_ERR_MSG_MOD(extack, "Failed to set node guid, RDMA_CM will not function properly for this vport");
+	}
 
 	ether_addr_copy(evport->info.mac, mac);
 	evport->info.node_guid = node_guid;
@@ -2249,12 +2255,15 @@ unlock:
 }
 
 int mlx5_eswitch_get_vport_config(struct mlx5_eswitch *esw,
-				  u16 vport, struct ifla_vf_info *ivi)
+				  u16 vport, struct ifla_vf_info *ivi,
+				  struct netlink_ext_ack *extack)
 {
 	struct mlx5_vport *evport = mlx5_eswitch_get_vport(esw, vport);
 
-	if (IS_ERR(evport))
+	if (IS_ERR(evport)) {
+		NL_SET_ERR_MSG_MOD(extack, "Vport does not exist");
 		return PTR_ERR(evport);
+	}
 
 	memset(ivi, 0, sizeof(*ivi));
 	ivi->vf = vport - 1;

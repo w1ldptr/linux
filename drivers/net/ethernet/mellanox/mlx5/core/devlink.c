@@ -268,3 +268,97 @@ void mlx5_devlink_unregister(struct devlink *devlink)
 				  ARRAY_SIZE(mlx5_devlink_params));
 	devlink_unregister(devlink);
 }
+
+#ifdef CONFIG_MLX5_ESWITCH
+
+static int
+mlx5_devlink_mac_set(struct devlink_slice *devlink_slice, u8 *mac,
+		     struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_priv(devlink_slice);
+
+	return mlx5_eswitch_set_vport_mac(vport->dev->priv.eswitch,
+					 vport->vport, mac, extack);
+}
+
+static int
+mlx5_devlink_mac_get(struct devlink_slice *devlink_slice, u8 *mac,
+		     struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_priv(devlink_slice);
+	struct ifla_vf_info ivi;
+	int err;
+
+	vport = devlink_slice_priv(devlink_slice);
+
+	err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
+					    vport->vport, &ivi, extack);
+	if (!err)
+		ether_addr_copy(mac, ivi.mac);
+
+	return err;
+}
+
+static struct devlink_slice_ops slice_ops = {
+	.hw_addr_set = mlx5_devlink_mac_set,
+	.hw_addr_get = mlx5_devlink_mac_get,
+	.hw_addr_len = ETH_ALEN,
+};
+
+int mlx5_devlink_slices_create(struct mlx5_eswitch *esw)
+{
+	struct devlink *devlink = priv_to_devlink(esw->dev);
+	struct mlx5_vport *vport;
+	int err;
+	int i;
+
+	mlx5_esw_for_all_vports(esw, i, vport) {
+		struct devlink_slice *devlink_slice;
+		struct devlink_slice_attrs attrs;
+		int slice_idx;
+
+		if (IS_ERR(vport)) {
+			err = PTR_ERR(vport);
+			goto err_dl_destroy;
+		}
+
+		if (vport->vport == MLX5_VPORT_UPLINK ||
+		    vport->vport == mlx5_eswitch_manager_vport(esw->dev))
+			continue;
+
+		slice_idx = vport->vport;
+		if (mlx5_eswitch_is_vf_vport(esw, vport->vport))
+			devlink_slice_attrs_pci_vf_init(&attrs, 0,
+							slice_idx - 1);
+		else if (vport->vport == MLX5_VPORT_PF)
+			devlink_slice_attrs_pci_pf_init(&attrs, slice_idx);
+
+		devlink_slice = devlink_slice_create(devlink, slice_idx,
+						     &slice_ops, &attrs,
+						     vport);
+		if (IS_ERR(devlink_slice)) {
+			err = PTR_ERR(devlink_slice);
+			goto err_dl_destroy;
+		}
+		vport->devlink_slice = devlink_slice;
+	}
+
+	return 0;
+
+err_dl_destroy:
+	mlx5_devlink_slices_destroy(esw);
+	return err;
+}
+
+void mlx5_devlink_slices_destroy(struct mlx5_eswitch *esw)
+{
+	struct mlx5_vport *vport;
+	int i;
+
+	mlx5_esw_for_all_vports_reverse(esw, i, vport) {
+		if (vport->devlink_slice)
+			devlink_slice_destroy(vport->devlink_slice);
+	}
+}
+
+#endif /* CONFIG_MLX5_ESWITCH */
