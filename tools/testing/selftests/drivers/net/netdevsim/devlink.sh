@@ -5,12 +5,13 @@ lib_dir=$(dirname $0)/../../../net/forwarding
 
 ALL_TESTS="fw_flash_test params_test regions_test reload_test \
 	   netns_reload_test resource_test dev_info_test \
-	   empty_reporter_test dummy_reporter_test"
+	   empty_reporter_test dummy_reporter_test slice_test"
 NUM_NETIFS=0
 source $lib_dir/lib.sh
 
 BUS_ADDR=10
 PORT_COUNT=4
+VF_COUNT=4
 DEV_NAME=netdevsim$BUS_ADDR
 SYSFS_NET_DIR=/sys/bus/netdevsim/devices/$DEV_NAME/net/
 DEBUGFS_DIR=/sys/kernel/debug/netdevsim/$DEV_NAME/
@@ -443,10 +444,60 @@ dummy_reporter_test()
 	log_test "dummy reporter test"
 }
 
+slice_attr_get()
+{
+	local handle=$1
+	local name=$2
+
+	cmd_jq "devlink slice show $handle -j" '.[][].'$name
+}
+
+slice_objects_get()
+{
+	local handle=$1
+
+	cmd_jq "devlink slice show -j" \
+	       '.[] | keys[] | select(contains("'$handle'"))'
+}
+
+slice_attr_set()
+{
+	local handle=$1
+	local name=$2
+	local value=$3
+
+	devlink slice set $handle $name $value
+}
+
+slice_test()
+{
+	RET=0
+
+	local slices=`slice_objects_get $DL_HANDLE`
+	local num_slices=`echo $slices | wc -w`
+	[ $num_slices == $VF_COUNT ]
+	check_err $? "Expected $VF_COUNT slices but got $num_slices"
+
+	i=1
+	for slice in $slices
+	do
+		local hw_addr=`printf "10:22:33:44:55:%02x" $i`
+
+		slice_attr_set "$slice" hw_addr $hw_addr
+		check_err $? "Failed to set hw_addr value"
+		value=$(slice_attr_get $slice hw_addr)
+		check_err $? "Failed to get hw_addr attr value"
+		[ "$value" == "$hw_addr" ]
+		check_err $? "Unexpected hw_addr attr value $value != $hw_addr"
+		i=$(($i+1))
+	done
+	log_test "slice test"
+}
+
 setup_prepare()
 {
 	modprobe netdevsim
-	echo "$BUS_ADDR $PORT_COUNT" > /sys/bus/netdevsim/new_device
+	echo "$BUS_ADDR $PORT_COUNT $VF_COUNT" > /sys/bus/netdevsim/new_device
 	while [ ! -d $SYSFS_NET_DIR ] ; do :; done
 }
 
