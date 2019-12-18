@@ -154,6 +154,12 @@ struct nsim_dev_port {
 	struct netdevsim *ns;
 };
 
+struct nsim_slice {
+	struct devlink_slice *devlink_slice;
+	unsigned int slice_index;
+	struct nsim_bus_dev *nsim_bus_dev;
+};
+
 struct nsim_dev {
 	struct nsim_bus_dev *nsim_bus_dev;
 	struct nsim_fib_data *fib_data;
@@ -177,6 +183,7 @@ struct nsim_dev {
 	bool fail_reload;
 	struct devlink_region *dummy_region;
 	struct nsim_dev_health health;
+	struct nsim_slice *slices;
 };
 
 static inline struct net *nsim_dev_net(struct nsim_dev *nsim_dev)
@@ -244,3 +251,6 @@ struct nsim_bus_dev {
 
 int nsim_bus_init(void);
 void nsim_bus_exit(void);
+
+int nsim_dev_slices_create(struct nsim_dev *nsim_dev, struct devlink *devlink);
+void nsim_dev_slices_destroy(struct nsim_dev *nsim_dev);

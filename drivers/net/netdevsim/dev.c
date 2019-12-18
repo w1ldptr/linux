@@ -789,10 +789,14 @@ int nsim_dev_probe(struct nsim_bus_dev *nsim_bus_dev)
 	if (err)
 		goto err_fib_destroy;
 
+	err = nsim_dev_slices_create(nsim_dev, devlink);
+	if (err)
+		goto err_dl_unregister;
+
 	err = devlink_params_register(devlink, nsim_devlink_params,
 				      ARRAY_SIZE(nsim_devlink_params));
 	if (err)
-		goto err_dl_unregister;
+		goto err_dl_slices_destroy;
 	nsim_devlink_set_params_init_values(nsim_dev, devlink);
 
 	err = nsim_dev_dummy_region_init(nsim_dev, devlink);
@@ -836,6 +840,8 @@ err_dummy_region_exit:
 err_params_unregister:
 	devlink_params_unregister(devlink, nsim_devlink_params,
 				  ARRAY_SIZE(nsim_devlink_params));
+err_dl_slices_destroy:
+	nsim_dev_slices_destroy(nsim_dev);
 err_dl_unregister:
 	devlink_unregister(devlink);
 err_fib_destroy:
@@ -874,6 +880,7 @@ void nsim_dev_remove(struct nsim_bus_dev *nsim_bus_dev)
 	nsim_dev_debugfs_exit(nsim_dev);
 	devlink_params_unregister(devlink, nsim_devlink_params,
 				  ARRAY_SIZE(nsim_devlink_params));
+	nsim_dev_slices_destroy(nsim_dev);
 	devlink_unregister(devlink);
 	devlink_resources_unregister(devlink, NULL);
 	devlink_free(devlink);
