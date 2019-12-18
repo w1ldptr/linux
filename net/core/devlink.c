@@ -37,6 +37,7 @@ struct devlink_slice {
 	unsigned int index;
 	const struct devlink_slice_ops *ops;
 	struct devlink_slice_attrs attrs;
+	struct devlink_port *devlink_port; /* linked port */
 	void *priv;
 };
 
@@ -664,6 +665,10 @@ static int devlink_nl_port_fill(struct sk_buff *msg, struct devlink *devlink,
 			goto nla_put_failure_type_locked;
 	}
 	spin_unlock_bh(&devlink_port->type_lock);
+	if (devlink_port->devlink_slice)
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_INDEX,
+		    devlink_port->devlink_slice->index))
+			goto nla_put_failure;
 	if (devlink_nl_port_attrs_put(msg, devlink_port))
 		goto nla_put_failure;
 
@@ -737,6 +742,11 @@ static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
 			goto nla_put_failure;
 		break;
 	}
+
+	if (devlink_slice->devlink_port)
+		if (nla_put_u32(msg, DEVLINK_ATTR_PORT_INDEX,
+		    devlink_slice->devlink_port->index))
+			goto nla_put_failure;
 
 	genlmsg_end(msg, hdr);
 	return 0;
@@ -6676,8 +6686,7 @@ static void devlink_port_type_warn_cancel(struct devlink_port *devlink_port)
 }
 
 /**
- *	devlink_port_register - Register devlink port
- *
+ *      devlink_port_register_with_slice - Register devlink port
  *	@devlink: devlink
  *	@devlink_port: devlink port
  *	@port_index: driver-specific numerical identifier of the port
@@ -6688,9 +6697,10 @@ static void devlink_port_type_warn_cancel(struct devlink_port *devlink_port)
  *	Note that the caller should take care of zeroing the devlink_port
  *	structure.
  */
-int devlink_port_register(struct devlink *devlink,
-			  struct devlink_port *devlink_port,
-			  unsigned int port_index)
+int devlink_port_register_with_slice(struct devlink *devlink,
+				     struct devlink_port *devlink_port,
+				     unsigned int port_index,
+				     struct devlink_slice *devlink_slice)
 {
 	mutex_lock(&devlink->lock);
 	if (devlink_port_index_exists(devlink, port_index)) {
@@ -6700,14 +6710,41 @@ int devlink_port_register(struct devlink *devlink,
 	devlink_port->devlink = devlink;
 	devlink_port->index = port_index;
 	devlink_port->registered = true;
+	devlink_port->devlink_slice = devlink_slice;
 	spin_lock_init(&devlink_port->type_lock);
 	list_add_tail(&devlink_port->list, &devlink->port_list);
 	INIT_LIST_HEAD(&devlink_port->param_list);
 	mutex_unlock(&devlink->lock);
 	INIT_DELAYED_WORK(&devlink_port->type_warn_dw, &devlink_port_type_warn);
 	devlink_port_type_warn_schedule(devlink_port);
+	if (devlink_slice) {
+		devlink_slice->devlink_port = devlink_port;
+		devlink_slice_notify(devlink_slice, DEVLINK_CMD_SLICE_NEW);
+	}
 	devlink_port_notify(devlink_port, DEVLINK_CMD_PORT_NEW);
 	return 0;
+}
+EXPORT_SYMBOL_GPL(devlink_port_register_with_slice);
+
+/**
+ *     devlink_port_register - Register devlink port
+ *
+ *     @devlink: devlink
+ *     @devlink_port: devlink port
+ *     @port_index: driver-specific numerical identifier of the port
+ *
+ *     Register devlink port with provided port index. User can use
+ *     any indexing, even hw-related one. devlink_port structure
+ *     is convenient to be embedded inside user driver private structure.
+ *     Note that the caller should take care of zeroing the devlink_port
+ *     structure.
+ */
+int devlink_port_register(struct devlink *devlink,
+			  struct devlink_port *devlink_port,
+			  unsigned int port_index)
+{
+	return devlink_port_register_with_slice(devlink, devlink_port,
+						port_index, NULL);
 }
 EXPORT_SYMBOL_GPL(devlink_port_register);
 
@@ -6718,9 +6755,14 @@ EXPORT_SYMBOL_GPL(devlink_port_register);
  */
 void devlink_port_unregister(struct devlink_port *devlink_port)
 {
+	struct devlink_slice *devlink_slice = devlink_port->devlink_slice;
 	struct devlink *devlink = devlink_port->devlink;
 
 	devlink_port_type_warn_cancel(devlink_port);
+	if (devlink_slice) {
+		devlink_slice->devlink_port = NULL;
+		devlink_slice_notify(devlink_slice, DEVLINK_CMD_SLICE_NEW);
+	}
 	devlink_port_notify(devlink_port, DEVLINK_CMD_PORT_DEL);
 	mutex_lock(&devlink->lock);
 	list_del(&devlink_port->list);
@@ -7021,6 +7063,7 @@ void devlink_slice_destroy(struct devlink_slice *devlink_slice)
 {
 	struct devlink *devlink = devlink_slice->devlink;
 
+	WARN_ON(devlink_slice->devlink_port);
 	devlink_slice_notify(devlink_slice, DEVLINK_CMD_SLICE_DEL);
 	mutex_lock(&devlink->lock);
 	list_del(&devlink_slice->list);
