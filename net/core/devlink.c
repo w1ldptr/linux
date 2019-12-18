@@ -31,6 +31,15 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/devlink.h>
 
+struct devlink_slice {
+	struct list_head list;
+	struct devlink *devlink;
+	unsigned int index;
+	const struct devlink_slice_ops *ops;
+	struct devlink_slice_attrs attrs;
+	void *priv;
+};
+
 static struct devlink_dpipe_field devlink_dpipe_fields_ethernet[] = {
 	{
 		.name = "destination mac",
@@ -181,6 +190,46 @@ static struct devlink_port *devlink_port_get_from_info(struct devlink *devlink,
 						       struct genl_info *info)
 {
 	return devlink_port_get_from_attrs(devlink, info->attrs);
+}
+
+static struct devlink_slice *
+devlink_slice_get_by_index(struct devlink *devlink, unsigned int slice_index)
+{
+	struct devlink_slice *devlink_slice;
+
+	list_for_each_entry(devlink_slice, &devlink->slice_list, list) {
+		if (devlink_slice->index == slice_index)
+			return devlink_slice;
+	}
+	return NULL;
+}
+
+static bool devlink_slice_index_exists(struct devlink *devlink,
+				       unsigned int slice_index)
+{
+	return devlink_slice_get_by_index(devlink, slice_index);
+}
+
+static struct devlink_slice *
+devlink_slice_get_from_attrs(struct devlink *devlink, struct nlattr **attrs)
+{
+	struct devlink_slice *devlink_slice;
+	u32 slice_index;
+
+	if (!attrs[DEVLINK_ATTR_SLICE_INDEX])
+		return ERR_PTR(-EINVAL);
+
+	slice_index = nla_get_u32(attrs[DEVLINK_ATTR_SLICE_INDEX]);
+	devlink_slice = devlink_slice_get_by_index(devlink, slice_index);
+	if (!devlink_slice)
+		return ERR_PTR(-ENODEV);
+	return devlink_slice;
+}
+
+static struct devlink_slice *
+devlink_slice_get_from_info(struct devlink *devlink, struct genl_info *info)
+{
+	return devlink_slice_get_from_attrs(devlink, info->attrs);
 }
 
 struct devlink_sb {
@@ -386,6 +435,7 @@ devlink_region_snapshot_get_by_id(struct devlink_region *region, u32 id)
 #define DEVLINK_NL_FLAG_NEED_DEVLINK	BIT(0)
 #define DEVLINK_NL_FLAG_NEED_PORT	BIT(1)
 #define DEVLINK_NL_FLAG_NEED_SB		BIT(2)
+#define DEVLINK_NL_FLAG_NEED_SLICE       BIT(3)
 
 /* The per devlink instance lock is taken by default in the pre-doit
  * operation, yet several commands do not require this. The global
@@ -418,6 +468,15 @@ static int devlink_nl_pre_doit(const struct genl_ops *ops,
 			goto unlock;
 		}
 		info->user_ptr[0] = devlink_port;
+	} else if (ops->internal_flags & DEVLINK_NL_FLAG_NEED_SLICE) {
+		struct devlink_slice *devlink_slice;
+
+		devlink_slice = devlink_slice_get_from_info(devlink, info);
+		if (IS_ERR(devlink_slice)) {
+			err = PTR_ERR(devlink_slice);
+			goto unlock;
+		}
+		info->user_ptr[0] = devlink_slice;
 	}
 	if (ops->internal_flags & DEVLINK_NL_FLAG_NEED_SB) {
 		struct devlink_sb *devlink_sb;
@@ -644,6 +703,54 @@ static void devlink_port_notify(struct devlink_port *devlink_port,
 				msg, 0, DEVLINK_MCGRP_CONFIG, GFP_KERNEL);
 }
 
+static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
+				 struct devlink_slice *devlink_slice,
+				 enum devlink_command cmd, u32 sliceid,
+				 u32 seq, int flags)
+{
+	void *hdr;
+
+	hdr = genlmsg_put(msg, sliceid, seq, &devlink_nl_family, flags, cmd);
+	if (!hdr)
+		return -EMSGSIZE;
+
+	if (devlink_nl_put_handle(msg, devlink))
+		goto nla_put_failure;
+	if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_INDEX, devlink_slice->index))
+		goto nla_put_failure;
+
+	genlmsg_end(msg, hdr);
+	return 0;
+
+nla_put_failure:
+	genlmsg_cancel(msg, hdr);
+	return -EMSGSIZE;
+}
+
+static void devlink_slice_notify(struct devlink_slice *devlink_slice,
+				 enum devlink_command cmd)
+{
+	struct devlink *devlink = devlink_slice->devlink;
+	struct sk_buff *msg;
+	int err;
+
+	WARN_ON(cmd != DEVLINK_CMD_SLICE_NEW && cmd != DEVLINK_CMD_SLICE_DEL);
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!msg)
+		return;
+
+	err = devlink_nl_slice_fill(msg, devlink,
+				    devlink_slice, cmd, 0, 0, 0);
+	if (err) {
+		nlmsg_free(msg);
+		return;
+	}
+
+	genlmsg_multicast_netns(&devlink_nl_family, devlink_net(devlink),
+				msg, 0, DEVLINK_MCGRP_CONFIG, GFP_KERNEL);
+}
+
 static int devlink_nl_cmd_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	struct devlink *devlink = info->user_ptr[0];
@@ -842,6 +949,78 @@ static int devlink_nl_cmd_port_unsplit_doit(struct sk_buff *skb,
 
 	port_index = nla_get_u32(info->attrs[DEVLINK_ATTR_PORT_INDEX]);
 	return devlink_port_unsplit(devlink, port_index, info->extack);
+}
+
+static int devlink_nl_cmd_slice_get_doit(struct sk_buff *skb,
+					 struct genl_info *info)
+{
+	struct devlink_slice *devlink_slice = info->user_ptr[0];
+	struct devlink *devlink = devlink_slice->devlink;
+	struct sk_buff *msg;
+	int err;
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!msg)
+		return -ENOMEM;
+
+	err = devlink_nl_slice_fill(msg, devlink, devlink_slice,
+				    DEVLINK_CMD_SLICE_NEW,
+				     info->snd_portid, info->snd_seq, 0);
+	if (err) {
+		nlmsg_free(msg);
+		return err;
+	}
+
+	return genlmsg_reply(msg, info);
+}
+
+static int devlink_nl_cmd_slice_get_dumpit(struct sk_buff *msg,
+					   struct netlink_callback *cb)
+{
+	struct devlink_slice *devlink_slice;
+	struct list_head *slice_list;
+	struct devlink *devlink;
+	int start = cb->args[0];
+	int idx = 0;
+	int err;
+
+	mutex_lock(&devlink_mutex);
+	list_for_each_entry(devlink, &devlink_list, list) {
+		slice_list = &devlink->slice_list;
+
+		if (!net_eq(devlink_net(devlink), sock_net(msg->sk)))
+			continue;
+		mutex_lock(&devlink->lock);
+		list_for_each_entry(devlink_slice, slice_list, list) {
+			if (idx < start) {
+				idx++;
+				continue;
+			}
+			err = devlink_nl_slice_fill(msg, devlink,
+						    devlink_slice,
+						    DEVLINK_CMD_NEW,
+						    NETLINK_CB(cb->skb).portid,
+						    cb->nlh->nlmsg_seq,
+						    NLM_F_MULTI);
+			if (err) {
+				mutex_unlock(&devlink->lock);
+				goto out;
+			}
+			idx++;
+		}
+		mutex_unlock(&devlink->lock);
+	}
+out:
+	mutex_unlock(&devlink_mutex);
+
+	cb->args[0] = idx;
+	return msg->len;
+}
+
+static int devlink_nl_cmd_slice_set_doit(struct sk_buff *skb,
+					 struct genl_info *info)
+{
+	return 0;
 }
 
 static int devlink_nl_sb_fill(struct sk_buff *msg, struct devlink *devlink,
@@ -5954,6 +6133,7 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_NETNS_PID] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_NETNS_FD] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_NETNS_ID] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_INDEX] = { .type = NLA_U32 },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
@@ -5979,6 +6159,19 @@ static const struct genl_ops devlink_nl_ops[] = {
 		.doit = devlink_nl_cmd_port_set_doit,
 		.flags = GENL_ADMIN_PERM,
 		.internal_flags = DEVLINK_NL_FLAG_NEED_PORT,
+	},
+	{
+		.cmd = DEVLINK_CMD_SLICE_GET,
+		.doit = devlink_nl_cmd_slice_get_doit,
+		.dumpit = devlink_nl_cmd_slice_get_dumpit,
+		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE,
+		/* can be retrieved by unprivileged users */
+	},
+	{
+		.cmd = DEVLINK_CMD_SLICE_SET,
+		.doit = devlink_nl_cmd_slice_set_doit,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE,
 	},
 	{
 		.cmd = DEVLINK_CMD_PORT_SPLIT,
@@ -6320,6 +6513,7 @@ struct devlink *devlink_alloc(const struct devlink_ops *ops, size_t priv_size)
 	devlink->ops = ops;
 	__devlink_net_set(devlink, &init_net);
 	INIT_LIST_HEAD(&devlink->port_list);
+	INIT_LIST_HEAD(&devlink->slice_list);
 	INIT_LIST_HEAD(&devlink->sb_list);
 	INIT_LIST_HEAD_RCU(&devlink->dpipe_table_list);
 	INIT_LIST_HEAD(&devlink->resource_list);
@@ -6421,6 +6615,7 @@ void devlink_free(struct devlink *devlink)
 	WARN_ON(!list_empty(&devlink->dpipe_table_list));
 	WARN_ON(!list_empty(&devlink->sb_list));
 	WARN_ON(!list_empty(&devlink->port_list));
+	WARN_ON(!list_empty(&devlink->slice_list));
 
 	kfree(devlink);
 }
@@ -6745,6 +6940,72 @@ static int __devlink_port_phys_port_name_get(struct devlink_port *devlink_port,
 
 	return 0;
 }
+
+void *devlink_slice_priv(struct devlink_slice *devlink_slice)
+{
+	return devlink_slice->priv;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_priv);
+
+/**
+ *	devlink_slice_create - create devlink slice
+ *
+ *	@devlink: devlink
+ *	@slice_index: driver-specific numerical identifier of the slice
+ *	@ops: slice specific ops
+ *	@attrs: slice specific attributes
+ *	@priv: driver private data
+ *
+ *	Create devlink slice with provided slice index. User can use
+ *	any indexing, even hw-related one.
+ */
+struct devlink_slice *
+devlink_slice_create(struct devlink *devlink,
+		     unsigned int slice_index,
+		     const struct devlink_slice_ops *ops,
+		     const struct devlink_slice_attrs *attrs,
+		     void *priv)
+{
+	struct devlink_slice *devlink_slice;
+
+	devlink_slice = kzalloc(sizeof(*devlink_slice), GFP_KERNEL);
+	if (!devlink_slice)
+		return ERR_PTR(-ENOMEM);
+
+	mutex_lock(&devlink->lock);
+	if (devlink_slice_index_exists(devlink, slice_index)) {
+		mutex_unlock(&devlink->lock);
+		kfree(devlink_slice);
+		return ERR_PTR(-EEXIST);
+	}
+	devlink_slice->devlink = devlink;
+	devlink_slice->priv = priv;
+	devlink_slice->index = slice_index;
+	devlink_slice->ops = ops;
+	devlink_slice->attrs = *attrs;
+	list_add_tail(&devlink_slice->list, &devlink->slice_list);
+	mutex_unlock(&devlink->lock);
+	devlink_slice_notify(devlink_slice, DEVLINK_CMD_SLICE_NEW);
+	return devlink_slice;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_create);
+
+/**
+ *	devlink_slice_destroy - destroy devlink slice
+ *
+ *	@devlink_slice: devlink slice
+ */
+void devlink_slice_destroy(struct devlink_slice *devlink_slice)
+{
+	struct devlink *devlink = devlink_slice->devlink;
+
+	devlink_slice_notify(devlink_slice, DEVLINK_CMD_SLICE_DEL);
+	mutex_lock(&devlink->lock);
+	list_del(&devlink_slice->list);
+	mutex_unlock(&devlink->lock);
+	kfree(devlink_slice);
+}
+EXPORT_SYMBOL_GPL(devlink_slice_destroy);
 
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,

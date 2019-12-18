@@ -23,6 +23,7 @@ struct devlink_ops;
 struct devlink {
 	struct list_head list;
 	struct list_head port_list;
+	struct list_head slice_list;
 	struct list_head sb_list;
 	struct list_head dpipe_table_list;
 	struct list_head resource_list;
@@ -74,6 +75,8 @@ struct devlink_port_attrs {
 	};
 };
 
+struct devlink_slice;
+
 struct devlink_port {
 	struct list_head list;
 	struct list_head param_list;
@@ -88,6 +91,9 @@ struct devlink_port {
 	void *type_dev;
 	struct devlink_port_attrs attrs;
 	struct delayed_work type_warn_dw;
+};
+
+struct devlink_slice_attrs {
 };
 
 struct devlink_sb_pool_info {
@@ -795,6 +801,9 @@ struct devlink_ops {
 			       const struct devlink_trap_group *group);
 };
 
+struct devlink_slice_ops {
+};
+
 static inline void *devlink_priv(struct devlink *devlink)
 {
 	BUG_ON(!devlink);
@@ -856,6 +865,15 @@ void devlink_port_attrs_pci_vf_set(struct devlink_port *devlink_port,
 				   const unsigned char *switch_id,
 				   unsigned char switch_id_len,
 				   u16 pf, u16 vf);
+struct devlink_slice *
+devlink_slice_create(struct devlink *devlink,
+		     unsigned int slice_index,
+		     const struct devlink_slice_ops *ops,
+		     const struct devlink_slice_attrs *attrs,
+		     void *priv);
+void devlink_slice_destroy(struct devlink_slice *devlink_slice);
+struct devlink *devlink_slice_devlink(struct devlink_slice *devlink_slice);
+void *devlink_slice_priv(struct devlink_slice *devlink_slice);
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,
 			u16 egress_pools_count, u16 ingress_tc_count,
