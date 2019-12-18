@@ -708,6 +708,7 @@ static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
 				 enum devlink_command cmd, u32 sliceid,
 				 u32 seq, int flags)
 {
+	struct devlink_slice_attrs *attrs = &devlink_slice->attrs;
 	void *hdr;
 
 	hdr = genlmsg_put(msg, sliceid, seq, &devlink_nl_family, flags, cmd);
@@ -718,6 +719,24 @@ static int devlink_nl_slice_fill(struct sk_buff *msg, struct devlink *devlink,
 		goto nla_put_failure;
 	if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_INDEX, devlink_slice->index))
 		goto nla_put_failure;
+
+	if (nla_put_u16(msg, DEVLINK_ATTR_SLICE_FLAVOUR, attrs->flavour))
+		goto nla_put_failure;
+	switch (attrs->flavour) {
+	case DEVLINK_SLICE_FLAVOUR_PCI_PF:
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_PF_INDEX,
+				attrs->pci_pf.pf))
+			goto nla_put_failure;
+		break;
+	case DEVLINK_SLICE_FLAVOUR_PCI_VF:
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_PF_INDEX,
+				attrs->pci_vf.pf))
+			goto nla_put_failure;
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_VF_INDEX,
+				attrs->pci_vf.vf))
+			goto nla_put_failure;
+		break;
+	}
 
 	genlmsg_end(msg, hdr);
 	return 0;
@@ -6134,6 +6153,9 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_NETNS_FD] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_NETNS_ID] = { .type = NLA_U32 },
 	[DEVLINK_ATTR_SLICE_INDEX] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_FLAVOUR] = { .type = NLA_U16 },
+	[DEVLINK_ATTR_SLICE_PF_INDEX] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_VF_INDEX] = { .type = NLA_U32 },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
@@ -7006,6 +7028,36 @@ void devlink_slice_destroy(struct devlink_slice *devlink_slice)
 	kfree(devlink_slice);
 }
 EXPORT_SYMBOL_GPL(devlink_slice_destroy);
+
+/**
+ *	devlink_slice_attrs_pci_pf_int - Init PCI PF slice attributes
+ *
+ *	@devlink_slice_attr: devlink slice attributes
+ *	@pf: associated PF index for the devlink slice instance
+ */
+void devlink_slice_attrs_pci_pf_init(struct devlink_slice_attrs *attrs,
+				     u16 pf)
+{
+	attrs->flavour = DEVLINK_SLICE_FLAVOUR_PCI_PF;
+	attrs->pci_pf.pf = pf;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_attrs_pci_pf_init);
+
+/**
+ *	devlink_slice_attrs_pci_vf_init - Init PCI VF slice attributes
+ *
+ *	@devlink_slice: devlink slice
+ *	@pf: associated PF index for the devlink slice instance
+ *	@vf: associated VF index for the devlink slice instance
+ */
+void devlink_slice_attrs_pci_vf_init(struct devlink_slice_attrs *attrs,
+				     u16 pf, u16 vf)
+{
+	attrs->flavour = DEVLINK_SLICE_FLAVOUR_PCI_VF;
+	attrs->pci_vf.pf = pf;
+	attrs->pci_vf.vf = vf;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_attrs_pci_vf_init);
 
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,

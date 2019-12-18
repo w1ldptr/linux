@@ -194,6 +194,11 @@ enum devlink_port_flavour {
 				      */
 };
 
+enum devlink_slice_flavour {
+	DEVLINK_SLICE_FLAVOUR_PCI_PF,
+	DEVLINK_SLICE_FLAVOUR_PCI_VF,
+};
+
 enum devlink_param_cmode {
 	DEVLINK_PARAM_CMODE_RUNTIME,
 	DEVLINK_PARAM_CMODE_DRIVERINIT,
@@ -433,6 +438,10 @@ enum devlink_attr {
 	DEVLINK_ATTR_NETNS_ID,			/* u32 */
 
 	DEVLINK_ATTR_SLICE_INDEX,		/* u32 */
+	DEVLINK_ATTR_SLICE_FLAVOUR,             /* u16 */
+	DEVLINK_ATTR_SLICE_PF_INDEX,            /* u32 */
+	DEVLINK_ATTR_SLICE_VF_INDEX,            /* u32 */
+
 
 	/* add new attributes above here, update the policy in devlink.c */
 

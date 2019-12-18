@@ -93,7 +93,21 @@ struct devlink_port {
 	struct delayed_work type_warn_dw;
 };
 
+struct devlink_slice_pci_pf_attrs {
+	u16 pf; /* Associated PCI PF for this slice. */
+};
+
+struct devlink_slice_pci_vf_attrs {
+	u16 pf; /* Associated PCI PF for this slice. */
+	u16 vf; /* Associated PCI VF for of the PCI PF for this slice. */
+};
+
 struct devlink_slice_attrs {
+	enum devlink_slice_flavour flavour;
+	union {
+		struct devlink_slice_pci_pf_attrs pci_pf;
+		struct devlink_slice_pci_vf_attrs pci_vf;
+	};
 };
 
 struct devlink_sb_pool_info {
@@ -874,6 +888,10 @@ devlink_slice_create(struct devlink *devlink,
 void devlink_slice_destroy(struct devlink_slice *devlink_slice);
 struct devlink *devlink_slice_devlink(struct devlink_slice *devlink_slice);
 void *devlink_slice_priv(struct devlink_slice *devlink_slice);
+void devlink_slice_attrs_pci_pf_init(struct devlink_slice_attrs *attrs,
+                                     u16 pf);
+void devlink_slice_attrs_pci_vf_init(struct devlink_slice_attrs *attrs,
+                                     u16 pf, u16 vf);
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,
 			u16 egress_pools_count, u16 ingress_tc_count,
