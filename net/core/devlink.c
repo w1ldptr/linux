@@ -1067,6 +1067,23 @@ out:
 static int devlink_nl_cmd_slice_set_doit(struct sk_buff *skb,
 					 struct genl_info *info)
 {
+	struct nlattr *nla_hw_addr = info->attrs[DEVLINK_ATTR_SLICE_HW_ADDR];
+	struct devlink_slice *devlink_slice = info->user_ptr[0];
+	const struct devlink_slice_ops *ops;
+	int err;
+
+	ops = devlink_slice->ops;
+	if (nla_hw_addr) {
+		u8 *hw_addr;
+
+		if (!ops || !ops->hw_addr_set)
+			return -EOPNOTSUPP;
+
+		hw_addr = nla_data(nla_hw_addr);
+		err = ops->hw_addr_set(devlink_slice, hw_addr, info->extack);
+		if (err)
+			return err;
+	}
 	return 0;
 }
 

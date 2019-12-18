@@ -817,6 +817,8 @@ struct devlink_ops {
 };
 
 struct devlink_slice_ops {
+	int (*hw_addr_set)(struct devlink_slice *slice,
+			   u8 *hw_addr, struct netlink_ext_ack *extack);
 	int (*hw_addr_get)(struct devlink_slice *slice,
 			   u8 *hw_addr, struct netlink_ext_ack *extack);
 	unsigned int hw_addr_len;
