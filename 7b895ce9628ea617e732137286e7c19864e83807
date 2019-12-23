@@ -1,3 +1,7 @@
 Changes V1 -> V2:
 
 - Rename DEVLINK_SLICE_RATE_NODE to DEVLINK_SLICE_RATE_TYPE_NODE.
+
+- Use unified devlink_slice_rate_notify() for slice rate group
+notifications instead of devlink_slice_rate_group_notify() dedicated
+specifically for groups.
