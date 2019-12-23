@@ -5,3 +5,5 @@ Changes V1 -> V2:
 - Use unified devlink_slice_rate_notify() for slice rate group
 notifications instead of devlink_slice_rate_group_notify() dedicated
 specifically for groups.
+
+- Don't require rate object type when getting rate object parameters.
