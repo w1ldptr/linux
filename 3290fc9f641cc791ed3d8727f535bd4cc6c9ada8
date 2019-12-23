@@ -1,3 +1,5 @@
 Changes V1 -> V2:
 
 - Rename DEVLINK_SLICE_RATE_LEAF to DEVLINK_SLICE_RATE_TYPE_LEAF.
+
+- Don't require rate object type when setting rate object parameters.
