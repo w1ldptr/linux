@@ -13,3 +13,6 @@ specifically for groups.
 
 - Don't require rate object type when getting/setting rate object
 parameters.
+
+- Call ops->rate_group_del() after generating delete notification in
+devlink_slice_rate_group_del() to prevent use after free.
