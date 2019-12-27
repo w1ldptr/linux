@@ -6,4 +6,6 @@ Changes V1 -> V2:
 
 - Use new struct devlink_slice_rate as representation of rate object.
 
-- Move rate ops from dedicated structure to devlink ops.
+- Move rate ops from dedicated structure to devlink ops and rename them to
+start with "rate_" prefix to distinguish them from other devlink ops
+callback names.
