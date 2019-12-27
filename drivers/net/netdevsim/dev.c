@@ -607,6 +607,50 @@ nsim_dev_devlink_trap_action_set(struct devlink *devlink,
 	return 0;
 }
 
+static int nsim_rate_min_tx_set(struct devlink_slice_rate *devlink_rate,
+				int min_tx_rate,
+				struct netlink_ext_ack *extack)
+{
+	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
+	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
+	int slice_index = nsim_slice->slice_index;
+
+	nsim_bus_dev->vfconfigs[slice_index].min_tx_rate = min_tx_rate;
+	return 0;
+}
+
+static int nsim_rate_min_tx_get(struct devlink_slice_rate *devlink_rate,
+				struct netlink_ext_ack *extack)
+{
+	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
+	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
+	int slice_index = nsim_slice->slice_index;
+
+	return nsim_bus_dev->vfconfigs[slice_index].min_tx_rate;
+}
+
+static int nsim_rate_max_tx_set(struct devlink_slice_rate *devlink_rate,
+				int max_tx_rate,
+				struct netlink_ext_ack *extack)
+{
+	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
+	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
+	int slice_index = nsim_slice->slice_index;
+
+	nsim_bus_dev->vfconfigs[slice_index].max_tx_rate = max_tx_rate;
+	return 0;
+}
+
+static int nsim_rate_max_tx_get(struct devlink_slice_rate *devlink_rate,
+				struct netlink_ext_ack *extack)
+{
+	struct nsim_slice *nsim_slice = devlink_slice_rate_priv(devlink_rate);
+	struct nsim_bus_dev *nsim_bus_dev = nsim_slice->nsim_bus_dev;
+	int slice_index = nsim_slice->slice_index;
+
+	return nsim_bus_dev->vfconfigs[slice_index].max_tx_rate;
+}
+
 static const struct devlink_ops nsim_dev_devlink_ops = {
 	.reload_down = nsim_dev_reload_down,
 	.reload_up = nsim_dev_reload_up,
@@ -614,6 +658,10 @@ static const struct devlink_ops nsim_dev_devlink_ops = {
 	.flash_update = nsim_dev_flash_update,
 	.trap_init = nsim_dev_devlink_trap_init,
 	.trap_action_set = nsim_dev_devlink_trap_action_set,
+	.rate_min_tx_set = nsim_rate_min_tx_set,
+	.rate_min_tx_get = nsim_rate_min_tx_get,
+	.rate_max_tx_set = nsim_rate_max_tx_set,
+	.rate_max_tx_get = nsim_rate_max_tx_get,
 };
 
 #define NSIM_DEV_MAX_MACS_DEFAULT 32

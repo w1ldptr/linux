@@ -83,7 +83,7 @@ int nsim_dev_slices_create(struct nsim_dev *nsim_dev, struct devlink *devlink)
 		nsim_slice->slice_index = vf;
 
 		devlink_rate = devlink_slice_rate_leaf_create(devlink_slice,
-							      NULL);
+							      nsim_slice);
 		if (IS_ERR(devlink_rate)) {
 			vf++;
 			err = PTR_ERR(devlink_rate);
