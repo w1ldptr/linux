@@ -815,7 +815,9 @@ static int devlink_nl_slice_rate_fill(struct sk_buff *msg,
 				      u32 seq, int flags,
 				      struct netlink_ext_ack *extack)
 {
+	const struct devlink_ops *ops = devlink->ops;
 	void *hdr;
+	int err;
 
 	hdr = genlmsg_put(msg, sliceid, seq, &devlink_nl_family, flags, cmd);
 	if (!hdr)
@@ -831,12 +833,36 @@ static int devlink_nl_slice_rate_fill(struct sk_buff *msg,
 			DEVLINK_SLICE_RATE_TYPE_LEAF))
 		goto nla_put_failure;
 
+	if (ops->rate_min_tx_get) {
+		int rate = ops->rate_min_tx_get(devlink_rate, extack);
+
+		if (rate < 0) {
+			err = rate;
+			goto rate_ops_failure;
+		}
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_RATE_MIN_TX, rate))
+			goto nla_put_failure;
+	}
+
+	if (ops->rate_max_tx_get) {
+		int rate = ops->rate_max_tx_get(devlink_rate, extack);
+
+		if (rate < 0) {
+			err = rate;
+			goto rate_ops_failure;
+		}
+		if (nla_put_u32(msg, DEVLINK_ATTR_SLICE_RATE_MAX_TX, rate))
+			goto nla_put_failure;
+	}
+
 	genlmsg_end(msg, hdr);
 	return 0;
 
 nla_put_failure:
+	err = -EMSGSIZE;
+rate_ops_failure:
 	genlmsg_cancel(msg, hdr);
-	return -EMSGSIZE;
+	return err;
 }
 
 static void devlink_slice_notify(struct devlink_slice *devlink_slice,
@@ -1247,6 +1273,53 @@ static int devlink_nl_cmd_slice_rate_get_doit(struct sk_buff *skb,
 	}
 
 	return genlmsg_reply(msg, info);
+}
+
+static int devlink_nl_set_slice_rate(struct devlink_slice_rate *devlink_rate,
+				     struct genl_info *info,
+				     struct nlattr *nla_min_tx_rate,
+				     struct nlattr *nla_max_tx_rate)
+{
+	struct devlink *devlink = devlink_rate->devlink;
+	const struct devlink_ops *ops = devlink->ops;
+	int rate, err;
+
+	if (nla_min_tx_rate) {
+		if (!ops->rate_min_tx_set)
+			return -EOPNOTSUPP;
+
+		rate = nla_get_u32(nla_min_tx_rate);
+		err = ops->rate_min_tx_set(devlink_rate, rate, info->extack);
+		if (err)
+			return err;
+	}
+
+	if (nla_max_tx_rate) {
+		if (!ops->rate_max_tx_set)
+			return -EOPNOTSUPP;
+
+		rate = nla_get_u32(nla_max_tx_rate);
+		err = ops->rate_max_tx_set(devlink_rate, rate, info->extack);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+static int devlink_nl_cmd_slice_rate_set_doit(struct sk_buff *skb,
+					      struct genl_info *info)
+{
+	struct devlink_slice_rate *devlink_rate = info->user_ptr[0];
+	struct nlattr *nla_min_tx_rate, *nla_max_tx_rate;
+	int err;
+
+	nla_min_tx_rate = info->attrs[DEVLINK_ATTR_SLICE_RATE_MIN_TX];
+	nla_max_tx_rate = info->attrs[DEVLINK_ATTR_SLICE_RATE_MAX_TX];
+	err = devlink_nl_set_slice_rate(devlink_rate, info,
+					nla_min_tx_rate, nla_max_tx_rate);
+
+	return err;
 }
 
 static int devlink_nl_sb_fill(struct sk_buff *msg, struct devlink *devlink,
@@ -6366,6 +6439,8 @@ static const struct nla_policy devlink_nl_policy[DEVLINK_ATTR_MAX + 1] = {
 	[DEVLINK_ATTR_SLICE_HW_ADDR] = { .type = NLA_BINARY,
 					.len = MAX_ADDR_LEN },
 	[DEVLINK_ATTR_SLICE_RATE_TYPE] = { .type = NLA_U16 },
+	[DEVLINK_ATTR_SLICE_RATE_MIN_TX] = { .type = NLA_U32 },
+	[DEVLINK_ATTR_SLICE_RATE_MAX_TX] = { .type = NLA_U32 },
 };
 
 static const struct genl_ops devlink_nl_ops[] = {
@@ -6411,6 +6486,12 @@ static const struct genl_ops devlink_nl_ops[] = {
 		.dumpit = devlink_nl_cmd_slice_rate_get_dumpit,
 		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE_RATE,
 		/* can be retrieved by unprivileged users */
+	},
+	{
+		.cmd = DEVLINK_CMD_SLICE_RATE_SET,
+		.doit = devlink_nl_cmd_slice_rate_set_doit,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = DEVLINK_NL_FLAG_NEED_SLICE_RATE,
 	},
 	{
 		.cmd = DEVLINK_CMD_PORT_SPLIT,
@@ -7219,6 +7300,12 @@ void *devlink_slice_priv(struct devlink_slice *devlink_slice)
 	return devlink_slice->priv;
 }
 EXPORT_SYMBOL_GPL(devlink_slice_priv);
+
+void *devlink_slice_rate_priv(struct devlink_slice_rate *devlink_rate)
+{
+	return devlink_rate->priv;
+}
+EXPORT_SYMBOL_GPL(devlink_slice_rate_priv);
 
 /**
  *	devlink_slice_create - create devlink slice

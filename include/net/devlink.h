@@ -77,6 +77,7 @@ struct devlink_port_attrs {
 };
 
 struct devlink_slice;
+struct devlink_slice_rate;
 
 struct devlink_port {
 	struct list_head list;
@@ -815,6 +816,20 @@ struct devlink_ops {
 	 */
 	int (*trap_group_init)(struct devlink *devlink,
 			       const struct devlink_trap_group *group);
+
+	/**
+	 * Slice rate control callbacks.
+	 */
+	int (*rate_min_tx_set)(struct devlink_slice_rate *slice_rate,
+			       int min_tx_rate,
+			       struct netlink_ext_ack *extack);
+	int (*rate_min_tx_get)(struct devlink_slice_rate *slice_rate,
+			       struct netlink_ext_ack *extack);
+	int (*rate_max_tx_set)(struct devlink_slice_rate *slice_rate,
+			       int max_tx_rate,
+			       struct netlink_ext_ack *extack);
+	int (*rate_max_tx_get)(struct devlink_slice_rate *slice_rate,
+			       struct netlink_ext_ack *extack);
 };
 
 struct devlink_slice_ops {
@@ -903,6 +918,7 @@ void devlink_slice_attrs_pci_pf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf);
 void devlink_slice_attrs_pci_vf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf, u16 vf);
+void *devlink_slice_rate_priv(struct devlink_slice_rate *devlink_rate);
 struct devlink_slice_rate *
 devlink_slice_rate_leaf_create(struct devlink_slice *devlink_slice,
 			       void *priv);

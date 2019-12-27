@@ -123,6 +123,7 @@ enum devlink_command {
 	DEVLINK_CMD_SLICE_DEL,
 
 	DEVLINK_CMD_SLICE_RATE_GET,	/* can dump */
+	DEVLINK_CMD_SLICE_RATE_SET,
 	DEVLINK_CMD_SLICE_RATE_NEW,
 	DEVLINK_CMD_SLICE_RATE_DEL,
 
@@ -452,6 +453,8 @@ enum devlink_attr {
 	DEVLINK_ATTR_SLICE_HW_ADDR,             /* binary */
 
 	DEVLINK_ATTR_SLICE_RATE_TYPE,		/* u16 */
+	DEVLINK_ATTR_SLICE_RATE_MIN_TX,		/* u32 */
+	DEVLINK_ATTR_SLICE_RATE_MAX_TX,		/* u32 */
 
 	/* add new attributes above here, update the policy in devlink.c */
 
