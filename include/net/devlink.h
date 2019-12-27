@@ -24,6 +24,7 @@ struct devlink {
 	struct list_head list;
 	struct list_head port_list;
 	struct list_head slice_list;
+	struct list_head slice_rate_list;
 	struct list_head sb_list;
 	struct list_head dpipe_table_list;
 	struct list_head resource_list;
@@ -902,6 +903,10 @@ void devlink_slice_attrs_pci_pf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf);
 void devlink_slice_attrs_pci_vf_init(struct devlink_slice_attrs *attrs,
                                      u16 pf, u16 vf);
+struct devlink_slice_rate *
+devlink_slice_rate_leaf_create(struct devlink_slice *devlink_slice,
+			       void *priv);
+void devlink_slice_rate_leaf_destroy(struct devlink_slice_rate *devlink_rate);
 int devlink_sb_register(struct devlink *devlink, unsigned int sb_index,
 			u32 size, u16 ingress_pools_count,
 			u16 egress_pools_count, u16 ingress_tc_count,

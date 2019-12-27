@@ -122,6 +122,10 @@ enum devlink_command {
 	DEVLINK_CMD_SLICE_NEW,
 	DEVLINK_CMD_SLICE_DEL,
 
+	DEVLINK_CMD_SLICE_RATE_GET,	/* can dump */
+	DEVLINK_CMD_SLICE_RATE_NEW,
+	DEVLINK_CMD_SLICE_RATE_DEL,
+
 	/* add new commands above here */
 	__DEVLINK_CMD_MAX,
 	DEVLINK_CMD_MAX = __DEVLINK_CMD_MAX - 1
@@ -197,6 +201,10 @@ enum devlink_port_flavour {
 enum devlink_slice_flavour {
 	DEVLINK_SLICE_FLAVOUR_PCI_PF,
 	DEVLINK_SLICE_FLAVOUR_PCI_VF,
+};
+
+enum devlink_slice_rate_type {
+	DEVLINK_SLICE_RATE_TYPE_LEAF,
 };
 
 enum devlink_param_cmode {
@@ -442,6 +450,8 @@ enum devlink_attr {
 	DEVLINK_ATTR_SLICE_PF_INDEX,            /* u32 */
 	DEVLINK_ATTR_SLICE_VF_INDEX,            /* u32 */
 	DEVLINK_ATTR_SLICE_HW_ADDR,             /* binary */
+
+	DEVLINK_ATTR_SLICE_RATE_TYPE,		/* u16 */
 
 	/* add new attributes above here, update the policy in devlink.c */
 
