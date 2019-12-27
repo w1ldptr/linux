@@ -1,0 +1,13 @@
+Changes V1 -> V2:
+
+- Rename DEVLINK_SLICE_RATE_LEAF to DEVLINK_SLICE_RATE_TYPE_LEAF.
+
+- Implement function devlink_slice_rate_notify() and
+DEVLINK_CMD_SLICE_RATE_{NEW|DEL} commands and use them for notifications
+when creating/deleting leaf rate object instead of putting rate object info
+into notification messages for slice object themselves.
+
+- Remove rate ops as implicit API for creating rate leaf when creating
+slice. Instead, provide dedicated
+devlink_slice_rate_leaf_{create|destroy}() API to create/destroy new struct
+devlink_slice_rate instances.
