@@ -1,0 +1,9 @@
+Changes V1 -> V2:
+
+- Rename DEVLINK_SLICE_RATE_LEAF to DEVLINK_SLICE_RATE_TYPE_LEAF.
+
+- Don't require rate object type when setting rate object parameters.
+
+- Use new struct devlink_slice_rate as representation of rate object.
+
+- Move rate ops from dedicated structure to devlink ops.
