@@ -14,5 +14,12 @@ specifically for groups.
 - Don't require rate object type when getting/setting rate object
 parameters.
 
-- Call ops->rate_group_del() after generating delete notification in
-devlink_slice_rate_group_del() to prevent use after free.
+- Use struct devlink_slice_rate as representation of both rate leaf and
+node objects. Unify functions to work with devlink_slice_rate structure
+instead of having dedicated function implementations for leafs and nodes.
+
+- Move rate ops from dedicated structure to devlink ops and replace "group"
+with "node" in their names.
+
+- Call ops->node_group_del() after generating delete notification in
+devlink_slice_node_group_del() to prevent use after free.
