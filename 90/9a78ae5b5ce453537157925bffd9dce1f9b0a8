@@ -8,3 +8,5 @@ callback ops names.
 
 - Destroy devlink slice rate nodes with function
 devlink_slice_rate_node_destroy_all() when deleting devlink instance.
+
+- Use new struct devlink_slice_rate as representation of rate object.
