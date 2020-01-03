@@ -26,3 +26,7 @@ with "node" in their names.
 
 - Call ops->node_group_del() after generating delete notification in
 devlink_slice_node_group_del() to prevent use after free.
+
+- Implement function devlink_slice_rate_node_destroy_all() that is intended
+to be used by drivers to cleanup all devlink slice rate groups before
+deleting the devlink instance.
