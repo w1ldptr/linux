@@ -27,6 +27,10 @@ with "node" in their names.
 - Call ops->node_group_del() after generating delete notification in
 devlink_slice_node_group_del() to prevent use after free.
 
+- Always destroy devlink_slice_rate->priv with
+devlink_slice_rate->priv_destuctor() instead of assuming that the driver
+performs cleanup in ops->node_group_del().
+
 - Implement function devlink_slice_rate_node_destroy_all() that is intended
 to be used by drivers to cleanup all devlink slice rate groups before
 deleting the devlink instance.
