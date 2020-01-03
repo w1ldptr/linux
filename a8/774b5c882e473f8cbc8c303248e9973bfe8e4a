@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Use new devlink_slice_rate_leaf_{create|destroy}() API to create/destroy
+slice rate leaf objects.
