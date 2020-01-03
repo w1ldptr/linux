@@ -11,3 +11,6 @@ into notification messages for slice object themselves.
 slice. Instead, provide dedicated
 devlink_slice_rate_leaf_{create|destroy}() API to create/destroy new struct
 devlink_slice_rate instances.
+
+- Define new struct devlink_slice_rate and use it as representation of rate
+object.
