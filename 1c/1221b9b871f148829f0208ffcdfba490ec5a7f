@@ -34,3 +34,6 @@ performs cleanup in ops->node_group_del().
 - Implement function devlink_slice_rate_node_destroy_all() that is intended
 to be used by drivers to cleanup all devlink slice rate groups before
 deleting the devlink instance.
+
+- Implement helpers devlink_slice_is{leaf|node}() intended to be used by
+supporting drivers to check devlink_slice_rate type.
