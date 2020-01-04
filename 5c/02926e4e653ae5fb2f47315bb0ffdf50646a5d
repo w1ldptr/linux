@@ -1,0 +1,2 @@
+- Implement helpers devlink_slice_is{leaf|node}() intended to be used by
+supporting drivers to check devlink_slice_rate type.
