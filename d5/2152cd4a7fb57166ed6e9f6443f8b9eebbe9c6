@@ -11,6 +11,11 @@ DEVLINK_ATTR_SLICE_RATE_NODE_NAME.
 notifications instead of devlink_slice_rate_group_notify() dedicated
 specifically for groups.
 
+- Implement support for tx rate control of node objects in this patch
+instead of standalone patch. This doesn't require much new code (only needs
+get/set to accept rate node objects in addition to leafs) due to unified
+representation of both rate leafs and nodes as single structure.
+
 - Don't require rate object type when getting/setting rate object
 parameters.
 
