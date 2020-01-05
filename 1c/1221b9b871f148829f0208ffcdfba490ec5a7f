@@ -37,3 +37,7 @@ deleting the devlink instance.
 
 - Implement helpers devlink_slice_is{leaf|node}() intended to be used by
 supporting drivers to check devlink_slice_rate type.
+
+- Implement helper devlink_slice_rate_set_priv() intended to be used by
+supporting drivers to set devlink slice rate priv pointer and corresponding
+priv_destructor function.
