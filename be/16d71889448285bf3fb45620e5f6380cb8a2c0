@@ -1,0 +1,9 @@
+Changes V1 -> V2:
+
+- Move driver callbacks from slice.c to dev.c where all other netdevsim
+devlink_ops callbacks are defined.
+
+- Change naming of netdevsim devlink ops functions according to changed
+callback ops names.
+
+- Use new struct devlink_slice_rate as representation of rate object.
