@@ -1,0 +1,15 @@
+Changes V1 -> V2:
+
+- Move driver callbacks from slice.c to dev.c where all other netdevsim
+devlink_ops callbacks are defined.
+
+- Change naming of netdevsim devlink ops functions according to changed
+callback ops names.
+
+- Destroy devlink slice rate nodes with function
+devlink_slice_rate_node_destroy_all() when deleting devlink instance.
+
+- Don't deallocate devlink_rate->priv manually. Defer to devlink API to use
+priv_destructor instead.
+
+- Use new struct devlink_slice_rate as representation of rate object.
