@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Don't provide rate object type when setting/getting rate object
+parameters.

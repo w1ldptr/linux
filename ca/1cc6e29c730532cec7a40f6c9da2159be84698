@@ -1,0 +1,11 @@
+Changes V1 -> V2:
+
+- Use struct devlink_slice_rate as representation of both rate leaf and
+node objects. Unify functions to work with devlink_slice_rate structure
+instead of having dedicated function implementations for leafs and nodes.
+
+- Move rate ops from dedicated structure to devlink ops and replace "group"
+with "node" in their names.
+
+- Use empty string parent group name instead of "noparent" to detach rate
+object from its parent node.
