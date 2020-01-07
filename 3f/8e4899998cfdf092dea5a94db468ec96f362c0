@@ -6,3 +6,6 @@ instead of having dedicated function implementations for leafs and nodes.
 
 - Move rate ops from dedicated structure to devlink ops and replace "group"
 with "node" in their names.
+
+- Use empty string parent group name instead of "noparent" to detach rate
+object from its parent node.
