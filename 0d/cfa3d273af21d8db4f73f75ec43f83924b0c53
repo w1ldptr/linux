@@ -46,3 +46,5 @@ supporting drivers to check devlink_slice_rate type.
 - Implement helper devlink_slice_rate_set_priv() intended to be used by
 supporting drivers to set devlink slice rate priv pointer and corresponding
 priv_destructor function.
+
+- When creating new group, verify that user provided non-empty name string.
