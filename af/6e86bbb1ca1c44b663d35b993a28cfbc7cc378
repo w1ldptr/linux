@@ -1,0 +1,3 @@
+Changes V1 -> V2:
+
+- Rename "group" to "node" when describing rate object grouping.
