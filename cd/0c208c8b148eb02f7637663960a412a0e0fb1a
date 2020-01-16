@@ -1,6 +1,6 @@
 Changes V2 -> V3:
 
 - Set devlink pointer in rate object before calling the driver callback
-when creating new rate node and provide helper to allow driver
-implementations to access the parent devlink object when creating new rate
-node.
+when creating new rate node and provide devlink_slice_rate_to_devlink()
+helper to allow driver implementations to access the parent devlink object
+when creating new rate node.
