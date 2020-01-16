@@ -106,48 +106,91 @@ static int mlx5_devlink_reload_up(struct devlink *devlink,
 static int mlx5_devlink_rate_min_tx_set(struct devlink_slice_rate *devlink_slice_rate,
 					int min_tx_rate, struct netlink_ext_ack *extack)
 {
-	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+	if (devlink_slice_rate_is_leaf(devlink_slice_rate)) {
+		struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
 
-	return mlx5_eswitch_set_vport_min_rate(vport->dev->priv.eswitch,
-					       vport->vport, min_tx_rate, extack);
+		return mlx5_eswitch_set_vport_min_rate(vport->dev->priv.eswitch,
+						       vport->vport, min_tx_rate, extack);
+	}
+
+	return -EOPNOTSUPP;
 }
 
 static int mlx5_devlink_rate_min_tx_get(struct devlink_slice_rate *devlink_slice_rate,
 					struct netlink_ext_ack *extack)
 {
-	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
-	struct ifla_vf_info ivi;
-	int err;
+	if (devlink_slice_rate_is_leaf(devlink_slice_rate)) {
+		struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+		struct ifla_vf_info ivi;
+		int err;
 
-	err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
-					    vport->vport, &ivi, extack);
-	if (err)
-		return err;
-	return ivi.min_tx_rate;
+		err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
+						    vport->vport, &ivi, extack);
+		if (err)
+			return err;
+		return ivi.min_tx_rate;
+	}
+
+	return -EOPNOTSUPP;
 }
 
 static int mlx5_devlink_rate_max_tx_set(struct devlink_slice_rate *devlink_slice_rate,
 					int max_tx_rate, struct netlink_ext_ack *extack)
 {
-	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+	if (devlink_slice_rate_is_leaf(devlink_slice_rate)) {
+		struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
 
-	return mlx5_eswitch_set_vport_max_rate(vport->dev->priv.eswitch,
-					       vport->vport, max_tx_rate,
-					       extack);
+		return mlx5_eswitch_set_vport_max_rate(vport->dev->priv.eswitch,
+						       vport->vport, max_tx_rate,
+						       extack);
+	}
+
+	return -EOPNOTSUPP;
 }
 
 static int mlx5_devlink_rate_max_tx_get(struct devlink_slice_rate *devlink_slice_rate,
 					struct netlink_ext_ack *extack)
 {
-	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
-	struct ifla_vf_info ivi;
-	int err;
+	if (devlink_slice_rate_is_leaf(devlink_slice_rate)) {
+		struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_slice_rate);
+		struct ifla_vf_info ivi;
+		int err;
 
-	err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
-					    vport->vport, &ivi, extack);
-	if (err)
-		return err;
-	return ivi.max_tx_rate;
+		err = mlx5_eswitch_get_vport_config(vport->dev->priv.eswitch,
+						    vport->vport, &ivi, extack);
+		if (err)
+			return err;
+		return ivi.max_tx_rate;
+	}
+
+	return -EOPNOTSUPP;
+}
+
+static int mlx5_devlink_rate_node_new(struct devlink_slice_rate *slice_node,
+				      struct netlink_ext_ack *extack)
+{
+	struct devlink *devlink = devlink_slice_rate_to_devlink(slice_node);
+	struct mlx5_core_dev *dev = devlink_priv(devlink);
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+	struct mlx5_vgroup *vgroup;
+
+	vgroup = mlx5_eswitch_create_vgroup(esw, extack);
+	if (IS_ERR(vgroup))
+		return PTR_ERR(vgroup);
+
+	devlink_slice_rate_set_priv(slice_node, vgroup, NULL);
+	return 0;
+}
+
+static int mlx5_devlink_rate_node_del(struct devlink_slice_rate *slice_node,
+				      struct netlink_ext_ack *extack)
+{
+	struct devlink *devlink = devlink_slice_rate_to_devlink(slice_node);
+	struct mlx5_vgroup *vgroup = devlink_slice_rate_priv(slice_node);
+	struct mlx5_core_dev *dev = devlink_priv(devlink);
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+
+	return mlx5_eswitch_destroy_vgroup(esw, vgroup, extack);
 }
 
 #endif
@@ -164,6 +207,8 @@ static const struct devlink_ops mlx5_devlink_ops = {
 	.rate_min_tx_get = mlx5_devlink_rate_min_tx_get,
 	.rate_max_tx_set = mlx5_devlink_rate_max_tx_set,
 	.rate_max_tx_get = mlx5_devlink_rate_max_tx_get,
+	.rate_node_new = mlx5_devlink_rate_node_new,
+	.rate_node_del = mlx5_devlink_rate_node_del,
 #endif
 	.flash_update = mlx5_devlink_flash_update,
 	.info_get = mlx5_devlink_info_get,
@@ -416,6 +461,14 @@ err_dl_destroy:
 	return err;
 }
 
+static void mlx5_devlink_rate_node_cleanup(struct mlx5_eswitch *esw)
+{
+	struct devlink *devlink = priv_to_devlink(esw->dev);
+
+	mlx5_eswitch_cleanup_vgroups(esw);
+	devlink_slice_rate_node_destroy_all(devlink);
+}
+
 void mlx5_devlink_slices_destroy(struct mlx5_eswitch *esw)
 {
 	struct mlx5_vport *vport;
@@ -427,6 +480,7 @@ void mlx5_devlink_slices_destroy(struct mlx5_eswitch *esw)
 		if (vport->devlink_slice)
 			devlink_slice_destroy(vport->devlink_slice);
 	}
+	mlx5_devlink_rate_node_cleanup(esw);
 }
 
 #endif /* CONFIG_MLX5_ESWITCH */

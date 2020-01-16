@@ -323,6 +323,7 @@ struct mlx5_vgroup *mlx5_eswitch_create_vgroup(struct mlx5_eswitch *esw,
 					       struct netlink_ext_ack *extack);
 int mlx5_eswitch_destroy_vgroup(struct mlx5_eswitch *esw, struct mlx5_vgroup *group,
 				struct netlink_ext_ack *extack);
+void mlx5_eswitch_cleanup_vgroups(struct mlx5_eswitch *esw);
 int mlx5_eswitch_set_vepa(struct mlx5_eswitch *esw, u8 setting);
 int mlx5_eswitch_get_vepa(struct mlx5_eswitch *esw, u8 *setting);
 int mlx5_eswitch_get_vport_config(struct mlx5_eswitch *esw,

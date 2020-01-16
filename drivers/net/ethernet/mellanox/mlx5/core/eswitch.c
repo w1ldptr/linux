@@ -1549,6 +1549,15 @@ int mlx5_eswitch_destroy_vgroup(struct mlx5_eswitch *esw, struct mlx5_vgroup *gr
 	return err;
 }
 
+void mlx5_eswitch_cleanup_vgroups(struct mlx5_eswitch *esw)
+{
+	struct mlx5_vgroup *vgroup, *tmp;
+
+	list_for_each_entry_safe(vgroup, tmp, &esw->qos.groups, list)
+		if (vgroup != esw->qos.group0)
+			mlx5_eswitch_destroy_vgroup(esw, vgroup, NULL);
+}
+
 static void esw_create_tsar(struct mlx5_eswitch *esw)
 {
 	u32 tsar_ctx[MLX5_ST_SZ_DW(scheduling_context)] = {0};
