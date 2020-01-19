@@ -211,6 +211,31 @@ static int mlx5_devlink_rate_node_del(struct devlink_slice_rate *slice_node,
 	return mlx5_eswitch_destroy_vgroup(esw, vgroup, extack);
 }
 
+static int mlx5_devlink_rate_parent_set(struct devlink_slice_rate *devlink_rate,
+					struct devlink_slice_rate *parent,
+					struct netlink_ext_ack *extack)
+{
+	struct mlx5_vgroup *vgroup = devlink_slice_rate_priv(parent);
+	struct mlx5_vport *vport;
+
+	if (devlink_slice_rate_is_node(devlink_rate))
+		return -EOPNOTSUPP;
+
+	vport = devlink_slice_rate_priv(devlink_rate);
+	return mlx5_eswitch_vport_update_vgroup(vport->dev->priv.eswitch, vport, vgroup,
+						extack);
+}
+
+static int mlx5_devlink_rate_parent_unset(struct devlink_slice_rate *devlink_rate,
+					  struct devlink_slice_rate *parent,
+					  struct netlink_ext_ack *extack)
+{
+	struct mlx5_vport *vport = devlink_slice_rate_priv(devlink_rate);
+
+	return mlx5_eswitch_vport_update_vgroup(vport->dev->priv.eswitch, vport, NULL,
+						extack);
+}
+
 #endif
 
 static const struct devlink_ops mlx5_devlink_ops = {
@@ -227,6 +252,8 @@ static const struct devlink_ops mlx5_devlink_ops = {
 	.rate_max_tx_get = mlx5_devlink_rate_max_tx_get,
 	.rate_node_new = mlx5_devlink_rate_node_new,
 	.rate_node_del = mlx5_devlink_rate_node_del,
+	.rate_parent_set = mlx5_devlink_rate_parent_set,
+	.rate_parent_unset = mlx5_devlink_rate_parent_unset,
 #endif
 	.flash_update = mlx5_devlink_flash_update,
 	.info_get = mlx5_devlink_info_get,
