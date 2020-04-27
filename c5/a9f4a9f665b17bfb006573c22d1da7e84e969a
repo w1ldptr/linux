@@ -1,0 +1,3 @@
+Changes V1 -> V2:
+
+- Remove redundant newline after tcf_exts_terse_dump() function.
