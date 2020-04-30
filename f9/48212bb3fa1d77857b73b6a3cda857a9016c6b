@@ -4,3 +4,6 @@ Changes V1 -> V2:
 
 - Remove declaration and references to unused function
 tcf_action_dump_terse().
+
+- Move this patch before the flower terse dump implementation patch. Move
+code that modifies fl_terse_dump() to following patch.
