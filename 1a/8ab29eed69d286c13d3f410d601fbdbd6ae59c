@@ -1,0 +1,6 @@
+Changes V1 -> V2:
+
+- Rename __tcf_action_dump_1() -> tcf_action_dump_terse().
+
+- Remove declaration and references to unused function
+tcf_action_dump_terse().
