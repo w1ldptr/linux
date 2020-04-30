@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Return error if user requested terse dump but classifier doesn't support
+it.
