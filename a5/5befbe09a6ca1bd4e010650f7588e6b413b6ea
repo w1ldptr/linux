@@ -1,0 +1,11 @@
+Changes V2 -> V3:
+
+- Change dump flags validation policy array definition according to
+upstream changes.
+
+Changes V1 -> V2:
+
+- Return error if user requested terse dump but classifier doesn't support
+it.
+
+- Provide validation policy for filter dump flags.
