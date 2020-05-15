@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Use terse dump flag value directly when defining dump policy array
+instead of first assigning it allowed flag values static constant u32.
