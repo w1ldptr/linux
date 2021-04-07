@@ -1,0 +1,6 @@
+Changes V1 -> V2:
+
+- Reimplement the fix to unconditionally release action module references
+in action create code and modify action idr create/release to manually
+get/put module reference instead of taking over the reference held by the
+caller (Cong Wang).
