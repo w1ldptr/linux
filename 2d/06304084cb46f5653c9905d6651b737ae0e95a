@@ -1,0 +1,6 @@
+Changes V1 -> V2:
+
+- Extend commit message with reproduction and fix details.
+
+- Don't extend tcf_action_put_many() with action filtering. Filter actions
+array in caller instead.
