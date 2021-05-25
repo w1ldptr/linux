@@ -1,0 +1,4 @@
+Changes V1 -> V2:
+
+- Create a wrapper for tc skb extension instead of modifying skb_ext_add()
+- suggested by Florian Westphal.
