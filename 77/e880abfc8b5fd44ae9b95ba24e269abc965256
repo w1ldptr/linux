@@ -1,0 +1,8 @@
+Changes V1 -> V2:
+
+- Combine patches that expose offloaded flow count and limit total
+offloaded flows.
+
+- Rework the counting logic to count in workqueue context.
+
+- Create dedicated namespace for flow table sysctls.
