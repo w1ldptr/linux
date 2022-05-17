@@ -1,3 +1,10 @@
+Changes V2 -> V3:
+
+- Move sysctl documentation to existing conntrack rst file.
+
+- Change Makefile to conditionally include nf_flow_table_sysctl.c file and
+remove corresponding ifdefs from the file.
+
 Changes V1 -> V2:
 
 - Combine patches that expose offloaded flow count and limit total
