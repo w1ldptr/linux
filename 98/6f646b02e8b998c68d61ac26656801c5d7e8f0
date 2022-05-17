@@ -1,0 +1,8 @@
+Changes V1 -> V2:
+
+- Combine patches that expose add, del, stats tasks.
+
+- Use percpu stats to count pending workqueue tasks instead of atomics.
+
+- Expose the stats via /proc/net/stats/nf_flowtable file instead of
+sysctls.
