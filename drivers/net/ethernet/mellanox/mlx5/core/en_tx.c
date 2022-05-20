@@ -380,11 +380,11 @@ mlx5e_sq_xmit_wqe(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	eseg->mss = attr->mss;
 
 	if (attr->ihs) {
-		if (skb_vlan_tag_present(skb)) {
-			eseg->inline_hdr.sz |= cpu_to_be16(attr->ihs + VLAN_HLEN);
-			mlx5e_insert_vlan(eseg->inline_hdr.start, skb, attr->ihs);
-			stats->added_vlan_packets++;
-		} else {
+		/* if (skb_vlan_tag_present(skb)) { */
+		/* 	eseg->inline_hdr.sz |= cpu_to_be16(attr->ihs + VLAN_HLEN); */
+		/* 	mlx5e_insert_vlan(eseg->inline_hdr.start, skb, attr->ihs); */
+		/* 	stats->added_vlan_packets++; */
+		/* } else { */
 			eseg->inline_hdr.sz |= cpu_to_be16(attr->ihs);
 			unsafe_memcpy(eseg->inline_hdr.start, skb->data, attr->ihs,
 				/* This copy has been bounds-checked earlier in
@@ -393,7 +393,7 @@ mlx5e_sq_xmit_wqe(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 				 * performance sensitive, splitting the copy is
 				 * undesirable.
 				 */);
-		}
+		/* } */
 		dseg += wqe_attr->ds_cnt_inl;
 	} else if (skb_vlan_tag_present(skb)) {
 		/* eseg->insert.type = cpu_to_be16(MLX5_ETH_WQE_INSERT_VLAN); */
