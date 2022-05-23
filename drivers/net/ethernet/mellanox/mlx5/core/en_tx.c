@@ -30,6 +30,7 @@
  * SOFTWARE.
  */
 
+#include "linux/kern_levels.h"
 #include <linux/tcp.h>
 #include <linux/if_vlan.h>
 #include <net/geneve.h>
@@ -101,6 +102,7 @@ static inline void mlx5e_insert_vlan(void *start, struct sk_buff *skb, u16 ihs)
 	vhdr->h_vlan_proto = skb->vlan_proto;
 	vhdr->h_vlan_TCI = cpu_to_be16(skb_vlan_tag_get(skb));
 	memcpy(&vhdr->h_vlan_encapsulated_proto, skb->data + cpy1_sz, cpy2_sz);
+	printk(KERN_WARNING "ADD VLAN SW tag=%hx id=%d\n", skb->vlan_proto, skb_vlan_tag_get(skb));
 }
 
 static inline void
@@ -401,6 +403,7 @@ mlx5e_sq_xmit_wqe(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 			eseg->insert.type |= cpu_to_be16(MLX5_ETH_WQE_SVLAN);
 		eseg->insert.vlan_tci = cpu_to_be16(skb_vlan_tag_get(skb));
 		stats->added_vlan_packets++;
+		printk(KERN_WARNING"ADD VLAN tag=%hx id=%d\n", be16_to_cpu(eseg->insert.type), be16_to_cpu(eseg->insert.vlan_tci));
 	}
 
 	dseg += wqe_attr->ds_cnt_ids;
