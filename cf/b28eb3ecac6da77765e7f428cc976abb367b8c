@@ -1,0 +1,16 @@
+Changes V2 -> V3:
+
+- Add CONFIG_NF_FLOW_TABLE_PROCFS dependency on SYSCTL.
+
+- Move dummy definitions of nf_flow_table_{init|fini}_proc() from source to
+nf_flow_table.h file in order to not break compilation when CONFIG_SYSCTL
+is disabled.
+
+Changes V1 -> V2:
+
+- Combine patches that expose add, del, stats tasks.
+
+- Use percpu stats to count pending workqueue tasks instead of atomics.
+
+- Expose the stats via /proc/net/stats/nf_flowtable file instead of
+sysctls.
