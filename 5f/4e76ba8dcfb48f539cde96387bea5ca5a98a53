@@ -1,0 +1,28 @@
+Changes V3 -> V4:
+
+- Move basic infrastructure code that registers pernet ops for flow table
+from previous patch in series that got nacked to this one.
+
+- Since sysctl functionality from previous patch got removed from the
+series and the new file is now only used for procfs-related code, rename it
+from nf_flow_table_sysctl.c to nf_flow_table_procfs.c.
+
+- Make nf_flow_table_procfs.c compiled conditionally depending on
+CONFIG_NF_FLOW_TABLE_PROCFS and remove ifdefs from the source file.
+
+Changes V2 -> V3:
+
+- Add CONFIG_NF_FLOW_TABLE_PROCFS dependency on SYSCTL.
+
+- Move dummy definitions of nf_flow_table_{init|fini}_proc() from source to
+nf_flow_table.h file in order to not break compilation when CONFIG_SYSCTL
+is disabled.
+
+Changes V1 -> V2:
+
+- Combine patches that expose add, del, stats tasks.
+
+- Use percpu stats to count pending workqueue tasks instead of atomics.
+
+- Expose the stats via /proc/net/stats/nf_flowtable file instead of
+sysctls.
