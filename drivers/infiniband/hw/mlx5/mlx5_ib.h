@@ -512,7 +512,7 @@ struct mlx5_ib_qp {
 	 */
 	struct mutex		mutex;
 	/* cached variant of create_flags from struct ib_qp_init_attr */
-	u32			flags;
+	u64			flags;
 	u32			port;
 	u8			state;
 	int			max_inline_data;

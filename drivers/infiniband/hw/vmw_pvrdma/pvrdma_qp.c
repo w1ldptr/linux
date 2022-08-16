@@ -206,7 +206,7 @@ int pvrdma_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *init_attr,
 
 	if (init_attr->create_flags) {
 		dev_warn(&dev->pdev->dev,
-			 "invalid create queuepair flags %#x\n",
+			 "invalid create queuepair flags 0x%llx\n",
 			 init_attr->create_flags);
 		return -EOPNOTSUPP;
 	}

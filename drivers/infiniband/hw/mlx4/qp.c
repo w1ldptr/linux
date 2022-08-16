@@ -287,7 +287,7 @@ static void mlx4_ib_wq_event(struct mlx4_qp *qp, enum mlx4_event type)
 			    type, qp->qpn);
 }
 
-static int send_wqe_overhead(enum mlx4_ib_qp_type type, u32 flags)
+static int send_wqe_overhead(enum mlx4_ib_qp_type type, u64 flags)
 {
 	/*
 	 * UD WQEs must have a datagram segment.
@@ -1518,7 +1518,7 @@ static int _mlx4_ib_create_qp(struct ib_pd *pd, struct mlx4_ib_qp *qp,
 			      struct ib_udata *udata)
 {
 	int err;
-	int sup_u_create_flags = MLX4_IB_QP_BLOCK_MULTICAST_LOOPBACK;
+	u64 sup_u_create_flags = MLX4_IB_QP_BLOCK_MULTICAST_LOOPBACK;
 	u16 xrcdn = 0;
 
 	if (init_attr->rwq_ind_tbl)
