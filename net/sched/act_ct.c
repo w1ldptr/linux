@@ -274,8 +274,41 @@ err_nat:
 	return err;
 }
 
+static bool tcf_ct_flow_table_get_timeout(struct nf_flowtable *ft,
+					  struct flow_offload *flow,
+					  s32 *val)
+{
+	struct nf_conn *ct = flow->ct;
+	int l4num =
+		nf_ct_protonum(ct);
+	struct net *net =
+		nf_ct_net(ct);
+
+	if (l4num == IPPROTO_TCP) {
+		struct nf_tcp_net *tn = nf_tcp_pernet(net);
+
+		ct->proto.tcp.seen[0].td_maxwin = 0;
+		ct->proto.tcp.seen[1].td_maxwin = 0;
+		*val = tn->timeouts[ct->proto.tcp.state];
+		*val -= tn->offload_timeout;
+	} else if (l4num == IPPROTO_UDP) {
+		struct nf_udp_net *tn = nf_udp_pernet(net);
+		enum udp_conntrack state =
+			test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ?
+			UDP_CT_REPLIED : UDP_CT_UNREPLIED;
+
+		*val = tn->timeouts[state];
+		*val -= tn->offload_timeout;
+	} else {
+		return false;
+	}
+
+	return true;
+}
+
 static struct nf_flowtable_type flowtable_ct = {
 	.action		= tcf_ct_flow_table_fill_actions,
+	.timeout	= tcf_ct_flow_table_get_timeout,
 	.owner		= THIS_MODULE,
 };
 
@@ -622,7 +655,7 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 	ct = flow->ct;
 
 	if (tcph && (unlikely(tcph->fin || tcph->rst))) {
-		flow_offload_teardown(flow);
+		flow_offload_teardown(nf_ft, flow);
 		return false;
 	}
 

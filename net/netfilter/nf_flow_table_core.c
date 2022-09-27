@@ -178,27 +178,42 @@ static void flow_offload_fixup_tcp(struct ip_ct_tcp *tcp)
 	tcp->seen[1].td_maxwin = 0;
 }
 
-static void flow_offload_fixup_ct(struct nf_conn *ct)
+static bool flow_offload_timeout_default(struct nf_conn *ct, s32 *timeout)
 {
 	struct net *net = nf_ct_net(ct);
 	int l4num = nf_ct_protonum(ct);
-	s32 timeout;
 
 	if (l4num == IPPROTO_TCP) {
 		struct nf_tcp_net *tn = nf_tcp_pernet(net);
 
 		flow_offload_fixup_tcp(&ct->proto.tcp);
 
-		timeout = tn->timeouts[ct->proto.tcp.state];
-		timeout -= tn->offload_timeout;
+		*timeout = tn->timeouts[ct->proto.tcp.state];
+		*timeout -= tn->offload_timeout;
 	} else if (l4num == IPPROTO_UDP) {
 		struct nf_udp_net *tn = nf_udp_pernet(net);
 
-		timeout = tn->timeouts[UDP_CT_REPLIED];
-		timeout -= tn->offload_timeout;
+		*timeout = tn->timeouts[UDP_CT_REPLIED];
+		*timeout -= tn->offload_timeout;
 	} else {
-		return;
+		return false;
 	}
+
+	return true;
+}
+
+static void flow_offload_fixup_ct(struct nf_flowtable *flow_table,
+				  struct flow_offload *flow)
+{
+	struct nf_conn *ct = flow->ct;
+	bool needs_fixup;
+	s32 timeout;
+
+	needs_fixup = flow_table->type->timeout ?
+		flow_table->type->timeout(flow_table, flow, &timeout) :
+		flow_offload_timeout_default(ct, &timeout);
+	if (!needs_fixup)
+		return;
 
 	if (timeout < 0)
 		timeout = 0;
@@ -348,11 +363,12 @@ static void flow_offload_del(struct nf_flowtable *flow_table,
 	flow_offload_free(flow);
 }
 
-void flow_offload_teardown(struct flow_offload *flow)
+void flow_offload_teardown(struct nf_flowtable *flow_table,
+			   struct flow_offload *flow)
 {
 	clear_bit(IPS_OFFLOAD_BIT, &flow->ct->status);
 	set_bit(NF_FLOW_TEARDOWN, &flow->flags);
-	flow_offload_fixup_ct(flow->ct);
+	flow_offload_fixup_ct(flow_table, flow);
 }
 EXPORT_SYMBOL_GPL(flow_offload_teardown);
 
@@ -421,7 +437,7 @@ static void nf_flow_offload_gc_step(struct nf_flowtable *flow_table,
 {
 	if (nf_flow_has_expired(flow) ||
 	    nf_ct_is_dying(flow->ct))
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 
 	if (test_bit(NF_FLOW_TEARDOWN, &flow->flags)) {
 		if (test_bit(NF_FLOW_HW, &flow->flags)) {
@@ -569,14 +585,14 @@ static void nf_flow_table_do_cleanup(struct nf_flowtable *flow_table,
 	struct net_device *dev = data;
 
 	if (!dev) {
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 		return;
 	}
 
 	if (net_eq(nf_ct_net(flow->ct), dev_net(dev)) &&
 	    (flow->tuplehash[0].tuple.iifidx == dev->ifindex ||
 	     flow->tuplehash[1].tuple.iifidx == dev->ifindex))
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 }
 
 void nf_flow_table_gc_cleanup(struct nf_flowtable *flowtable,

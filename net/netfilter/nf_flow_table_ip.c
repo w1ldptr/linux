@@ -18,7 +18,8 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-static int nf_flow_state_check(struct flow_offload *flow, int proto,
+static int nf_flow_state_check(struct nf_flowtable *flow_table,
+			       struct flow_offload *flow, int proto,
 			       struct sk_buff *skb, unsigned int thoff)
 {
 	struct tcphdr *tcph;
@@ -28,7 +29,7 @@ static int nf_flow_state_check(struct flow_offload *flow, int proto,
 
 	tcph = (void *)(skb_network_header(skb) + thoff);
 	if (unlikely(tcph->fin || tcph->rst)) {
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 		return -1;
 	}
 
@@ -373,11 +374,11 @@ nf_flow_offload_ip_hook(void *priv, struct sk_buff *skb,
 
 	iph = (struct iphdr *)(skb_network_header(skb) + offset);
 	thoff = (iph->ihl * 4) + offset;
-	if (nf_flow_state_check(flow, iph->protocol, skb, thoff))
+	if (nf_flow_state_check(flow_table, flow, iph->protocol, skb, thoff))
 		return NF_ACCEPT;
 
 	if (!nf_flow_dst_check(&tuplehash->tuple)) {
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 		return NF_ACCEPT;
 	}
 
@@ -419,7 +420,7 @@ nf_flow_offload_ip_hook(void *priv, struct sk_buff *skb,
 	case FLOW_OFFLOAD_XMIT_DIRECT:
 		ret = nf_flow_queue_xmit(state->net, skb, tuplehash, ETH_P_IP);
 		if (ret == NF_DROP)
-			flow_offload_teardown(flow);
+			flow_offload_teardown(flow_table, flow);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -639,11 +640,11 @@ nf_flow_offload_ipv6_hook(void *priv, struct sk_buff *skb,
 
 	ip6h = (struct ipv6hdr *)(skb_network_header(skb) + offset);
 	thoff = sizeof(*ip6h) + offset;
-	if (nf_flow_state_check(flow, ip6h->nexthdr, skb, thoff))
+	if (nf_flow_state_check(flow_table, flow, ip6h->nexthdr, skb, thoff))
 		return NF_ACCEPT;
 
 	if (!nf_flow_dst_check(&tuplehash->tuple)) {
-		flow_offload_teardown(flow);
+		flow_offload_teardown(flow_table, flow);
 		return NF_ACCEPT;
 	}
 
@@ -684,7 +685,7 @@ nf_flow_offload_ipv6_hook(void *priv, struct sk_buff *skb,
 	case FLOW_OFFLOAD_XMIT_DIRECT:
 		ret = nf_flow_queue_xmit(state->net, skb, tuplehash, ETH_P_IPV6);
 		if (ret == NF_DROP)
-			flow_offload_teardown(flow);
+			flow_offload_teardown(flow_table, flow);
 		break;
 	default:
 		WARN_ON_ONCE(1);

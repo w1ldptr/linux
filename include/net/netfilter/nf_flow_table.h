@@ -61,6 +61,9 @@ struct nf_flowtable_type {
 						  enum flow_offload_tuple_dir dir,
 						  struct nf_flow_rule *flow_rule);
 	void				(*free)(struct nf_flowtable *ft);
+	bool				(*timeout)(struct nf_flowtable *ft,
+						   struct flow_offload *flow,
+						   s32 *val);
 	nf_hookfn			*hook;
 	struct module			*owner;
 };
@@ -278,7 +281,8 @@ void nf_flow_table_cleanup(struct net_device *dev);
 int nf_flow_table_init(struct nf_flowtable *flow_table);
 void nf_flow_table_free(struct nf_flowtable *flow_table);
 
-void flow_offload_teardown(struct flow_offload *flow);
+void flow_offload_teardown(struct nf_flowtable *flow_table,
+			   struct flow_offload *flow);
 
 void nf_flow_snat_port(const struct flow_offload *flow,
 		       struct sk_buff *skb, unsigned int thoff,
