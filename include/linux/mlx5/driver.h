@@ -810,6 +810,9 @@ struct mlx5_core_dev {
 	u64			num_block_tc;
 	u64			num_block_ipsec;
 	u64 			num_ipsec_offloads;
+#ifdef CONFIG_MLX5_MACSEC
+	struct mlx5_macsec_fs *macsec_fs;
+#endif
 };
 
 struct mlx5_db {
