@@ -1,3 +1,5 @@
 Changes V1 -> V2:
 
 - Add missing include that caused compilation errors on certain configs.
+
+- Change naming in nfp driver as suggested by Simon and Baowen.
