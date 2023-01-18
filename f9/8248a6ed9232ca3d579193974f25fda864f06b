@@ -1,3 +1,8 @@
+Changes V2 -> V3:
+
+- Reuse existing meta action 'cookie' field to obtain ctinfo instead of
+introducing a new field as suggested by Marcelo.
+
 Changes V1 -> V2:
 
 - Add missing include that caused compilation errors on certain configs.
