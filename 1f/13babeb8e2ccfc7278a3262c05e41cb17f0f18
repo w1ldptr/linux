@@ -1,0 +1,9 @@
+Changes V5 -> V6:
+
+- Rework the patch to only set flow_offload NF_FLOW_HW_ESTABLISHED flag
+instead of caching whole ctinfo in dedicated field.
+
+Changes V3 -> V4:
+
+- New patch replaces gc async update that is no longer needed after
+refactoring of following act_ct patches.
