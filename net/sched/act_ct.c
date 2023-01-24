@@ -669,12 +669,6 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
 	ct = flow->ct;
 
-	if (dir == FLOW_OFFLOAD_DIR_ORIGINAL)
-		ctinfo = test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ?
-			IP_CT_ESTABLISHED : IP_CT_NEW;
-	else
-		ctinfo = IP_CT_ESTABLISHED_REPLY;
-
 	if (dir == FLOW_OFFLOAD_DIR_REPLY &&
 	    !test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags)) {
 		/* Only offload reply direction after connection became
@@ -695,6 +689,12 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 		flow_offload_teardown(nf_ft, flow);
 		return false;
 	}
+
+	if (dir == FLOW_OFFLOAD_DIR_ORIGINAL)
+		ctinfo = test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ?
+			IP_CT_ESTABLISHED : IP_CT_NEW;
+	else
+		ctinfo = IP_CT_ESTABLISHED_REPLY;
 
 	flow_offload_refresh(nf_ft, flow);
 	nf_conntrack_get(&ct->ct_general);
