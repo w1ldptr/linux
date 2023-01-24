@@ -683,9 +683,9 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 		if (test_bit(IPS_ASSURED_BIT, &ct->status))
 			set_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags);
 		else if ((enum ip_conntrack_info)READ_ONCE(flow->ext_data) ==
-			   ctinfo)
+			 IP_CT_ESTABLISHED)
 			/* If flow_table flow has already been updated to the
-			 * same ctinfo, then skip the refresh.
+			 * established state, then don't refresh.
 			 */
 			return false;
 		printk(KERN_WARNING"Reply dir packets. Bidir=%u, ctinfo=%x\n", test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags), ctinfo);
