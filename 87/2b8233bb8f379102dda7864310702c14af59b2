@@ -1,3 +1,7 @@
+Changes V3 -> V4:
+
+- Only obtain ctinfo in mlx5 after checking the meta action pointer.
+
 Changes V2 -> V3:
 
 - Reuse existing meta action 'cookie' field to obtain ctinfo instead of
