@@ -303,6 +303,7 @@ static bool tcf_ct_flow_table_get_timeout(struct nf_flowtable *ft,
 
 		*val = tn->timeouts[state];
 		*val -= tn->offload_timeout;
+		printk(KERN_WARNING"Timeout UDP %u\n", state);
 	} else {
 		return false;
 	}
