@@ -251,6 +251,7 @@ static int tcf_ct_flow_table_fill_actions(struct net *net,
 		dir = IP_CT_DIR_ORIGINAL;
 		ctinfo = test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ?
 			IP_CT_ESTABLISHED : IP_CT_NEW;
+		printk(KERN_WARNING"Setting ext_data to %x\n", ctinfo);
 		WRITE_ONCE(flow->ext_data, (void *)ctinfo);
 		break;
 	case FLOW_OFFLOAD_DIR_REPLY:
@@ -686,6 +687,7 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 			 * same ctinfo, then skip the refresh.
 			 */
 			return false;
+		printk(KERN_WARNING"Reply dir packets. Bidir=%u, ctinfo=%x\n", test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags), ctinfo);
 	}
 
 	if (tcph && (unlikely(tcph->fin || tcph->rst))) {
