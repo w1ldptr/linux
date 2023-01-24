@@ -1169,12 +1169,14 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 	if (entry && refcount_inc_not_zero(&entry->refcnt)) {
 		if (entry->restore_cookie == meta_action->ct_metadata.cookie) {
 			spin_unlock_bh(&ct_priv->ht_lock);
+			printk(KERN_WARNING"Same cookie. Skipping\n");
 			mlx5_tc_ct_entry_put(entry);
 			return -EEXIST;
 		}
 
 		entry->restore_cookie = meta_action->ct_metadata.cookie;
 		spin_unlock_bh(&ct_priv->ht_lock);
+		printk(KERN_WARNING"Update entry\n");
 
 		err = mlx5_tc_ct_entry_replace_rules(ct_priv, flow_rule, entry,
 						     ft->zone_restore_id);
@@ -1200,6 +1202,7 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 		return 0;
 	}
 	spin_unlock_bh(&ct_priv->ht_lock);
+	printk(KERN_WARNING"NEW\n");
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
