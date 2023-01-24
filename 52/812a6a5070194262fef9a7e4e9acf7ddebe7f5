@@ -1,0 +1,4 @@
+Changes V3 -> V4:
+
+- New patch replaces gc async update that is no longer needed after
+refactoring of following act_ct patches.
