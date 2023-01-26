@@ -791,6 +791,7 @@ static int mlx5_esw_vport_caps_get(struct mlx5_eswitch *esw, struct mlx5_vport *
 {
 	int query_out_sz = MLX5_ST_SZ_BYTES(query_hca_cap_out);
 	bool ipsec_crypto_enabled;
+	bool ipsec_packet_enabled;
 	void *query_ctx;
 	void *hca_caps;
 	int err;
@@ -822,10 +823,12 @@ static int mlx5_esw_vport_caps_get(struct mlx5_eswitch *esw, struct mlx5_vport *
 	hca_caps = MLX5_ADDR_OF(query_hca_cap_out, query_ctx, capability);
 	vport->info.mig_enabled = MLX5_GET(cmd_hca_cap_2, hca_caps, migratable);
 
-	err = mlx5_esw_ipsec_vf_offload_get(esw->dev, vport, &ipsec_crypto_enabled);
+	err = mlx5_esw_ipsec_vf_offload_get(esw->dev, vport, &ipsec_crypto_enabled,
+					    &ipsec_packet_enabled);
 	if (err)
 		goto out_free;
 	vport->info.ipsec_crypto_enabled = ipsec_crypto_enabled;
+	vport->info.ipsec_packet_enabled = ipsec_packet_enabled;
 out_free:
 	kfree(query_ctx);
 	return err;
@@ -963,7 +966,8 @@ int mlx5_esw_vport_enable(struct mlx5_eswitch *esw, u16 vport_num,
 	/* Sync with current vport context */
 	vport->enabled_events = enabled_events;
 	vport->enabled = true;
-	if (vport->vport != MLX5_VPORT_PF && vport->info.ipsec_crypto_enabled)
+	if (vport->vport != MLX5_VPORT_PF &&
+	    (vport->info.ipsec_crypto_enabled || vport->info.ipsec_packet_enabled))
 		mlx5_esw_vport_ipsec_offload_enable(esw);
 
 	/* Esw manager is trusted by default. Host PF (vport 0) is trusted as well
@@ -1024,7 +1028,8 @@ void mlx5_esw_vport_disable(struct mlx5_eswitch *esw, u16 vport_num)
 	    MLX5_CAP_GEN(esw->dev, vhca_resource_manager))
 		mlx5_esw_vport_vhca_id_clear(esw, vport_num);
 
-	if (vport->vport != MLX5_VPORT_PF && vport->info.ipsec_crypto_enabled)
+	if (vport->vport != MLX5_VPORT_PF &&
+	    (vport->info.ipsec_crypto_enabled || vport->info.ipsec_packet_enabled))
 		mlx5_esw_vport_ipsec_offload_disable(esw);
 
 	/* We don't assume VFs will cleanup after themselves.

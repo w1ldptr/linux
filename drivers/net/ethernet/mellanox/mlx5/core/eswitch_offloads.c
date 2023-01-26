@@ -4570,4 +4570,101 @@ out:
 	mutex_unlock(&esw->state_lock);
 	return err;
 }
+
+int mlx5_devlink_port_fn_ipsec_packet_get(struct devlink_port *port, bool *is_enabled,
+					  struct netlink_ext_ack *extack)
+{
+	struct mlx5_eswitch *esw;
+	struct mlx5_vport *vport;
+	int err = -EOPNOTSUPP;
+
+	esw = mlx5_devlink_eswitch_get(port->devlink);
+	if (IS_ERR(esw))
+		return PTR_ERR(esw);
+
+	vport = mlx5_devlink_port_fn_get_vport(port, esw);
+	if (IS_ERR(vport)) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid port");
+		return PTR_ERR(vport);
+	}
+
+	if (!mlx5_esw_ipsec_vf_offload_supported(esw->dev)) {
+		NL_SET_ERR_MSG_MOD(extack, "Device doesn't support ipsec_packet");
+		return err;
+	}
+
+	mutex_lock(&esw->state_lock);
+	if (vport->enabled) {
+		*is_enabled = vport->info.ipsec_packet_enabled;
+		err = 0;
+	}
+	mutex_unlock(&esw->state_lock);
+	return err;
+}
+
+int mlx5_devlink_port_fn_ipsec_packet_set(struct devlink_port *port, bool enable,
+					  struct netlink_ext_ack *extack)
+{
+	struct mlx5_eswitch *esw;
+	struct mlx5_vport *vport;
+	int err = -EOPNOTSUPP;
+	u16 vport_num;
+
+	esw = mlx5_devlink_eswitch_get(port->devlink);
+	if (IS_ERR(esw))
+		return PTR_ERR(esw);
+
+	vport = mlx5_devlink_port_fn_get_vport(port, esw);
+	if (IS_ERR(vport)) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid port");
+		return PTR_ERR(vport);
+	}
+
+	vport_num = mlx5_esw_devlink_port_index_to_vport_num(port->index);
+	if (!mlx5_esw_ipsec_vf_packet_offload_supported(esw->dev, vport_num, &err)) {
+		if (err == -EOPNOTSUPP)
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Device doesn't support ipsec_packet or capability is blocked");
+		else
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Failure while checking device ipsec_packet capability support");
+		return err;
+	}
+
+	mutex_lock(&esw->state_lock);
+	if (!vport->enabled) {
+		NL_SET_ERR_MSG_MOD(extack, "Eswitch vport is disabled");
+		goto out;
+	}
+	if (vport->info.ipsec_packet_enabled == enable) {
+		err = 0;
+		goto out;
+	}
+
+	err = mlx5_esw_ipsec_vf_packet_offload_set(esw, vport, enable);
+	switch (err) {
+	case 0:
+		break;
+	case -EBUSY:
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Failed setting ipsec_packet. Make sure ip xfrm state/policy is cleared on the PF.");
+		goto out;
+	case -EINVAL:
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Failed setting ipsec_packet. Make sure to unbind the VF first");
+		goto out;
+	default:
+		NL_SET_ERR_MSG_MOD(extack, "Failed setting HCA ipsec_full_offload cap.");
+		goto out;
+	}
+
+	vport->info.ipsec_packet_enabled = enable;
+	if (enable)
+		mlx5_esw_vport_ipsec_offload_enable(esw);
+	else
+		mlx5_esw_vport_ipsec_offload_disable(esw);
+out:
+	mutex_unlock(&esw->state_lock);
+	return err;
+}
 #endif /* CONFIG_XFRM */

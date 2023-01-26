@@ -38,9 +38,11 @@ out:
 
 enum esw_vport_ipsec_offload {
 	MLX5_ESW_VPORT_IPSEC_CRYPTO_OFFLOAD,
+	MLX5_ESW_VPORT_IPSEC_PACKET_OFFLOAD,
 };
 
-static int esw_ipsec_vf_query(struct mlx5_core_dev *dev, struct mlx5_vport *vport, bool *crypto)
+static int esw_ipsec_vf_query(struct mlx5_core_dev *dev, struct mlx5_vport *vport,
+			      bool *crypto, bool *packet)
 {
 	int query_sz = MLX5_ST_SZ_BYTES(query_hca_cap_out);
 	void *hca_cap = NULL, *query_cap = NULL;
@@ -55,6 +57,7 @@ static int esw_ipsec_vf_query(struct mlx5_core_dev *dev, struct mlx5_vport *vpor
 		return err;
 	if (!ipsec_enabled) {
 		*crypto = false;
+		*packet = false;
 		return 0;
 	}
 
@@ -68,6 +71,7 @@ static int esw_ipsec_vf_query(struct mlx5_core_dev *dev, struct mlx5_vport *vpor
 
 	hca_cap = MLX5_ADDR_OF(query_hca_cap_out, query_cap, capability);
 	*crypto = MLX5_GET(ipsec_cap, hca_cap, ipsec_crypto_offload);
+	*packet = MLX5_GET(ipsec_cap, hca_cap, ipsec_full_offload);
 out:
 	kvfree(query_cap);
 	return err;
@@ -142,6 +146,9 @@ static int esw_ipsec_vf_set_bytype(struct mlx5_core_dev *dev, struct mlx5_vport 
 	case MLX5_ESW_VPORT_IPSEC_CRYPTO_OFFLOAD:
 		MLX5_SET(ipsec_cap, cap, ipsec_crypto_offload, enable);
 		break;
+	case MLX5_ESW_VPORT_IPSEC_PACKET_OFFLOAD:
+		MLX5_SET(ipsec_cap, cap, ipsec_full_offload, enable);
+		break;
 	default:
 		ret = -EOPNOTSUPP;
 		goto out;
@@ -199,6 +206,7 @@ static int esw_ipsec_vf_offload_set_bytype(struct mlx5_eswitch *esw, struct mlx5
 					   bool enable, enum esw_vport_ipsec_offload type)
 {
 	struct mlx5_core_dev *dev = esw->dev;
+	bool crypto_enabled, packet_enabled;
 	int err = 0;
 
 	if (vport->vport == MLX5_VPORT_PF)
@@ -225,13 +233,24 @@ static int esw_ipsec_vf_offload_set_bytype(struct mlx5_eswitch *esw, struct mlx5
 		err = esw_ipsec_vf_set_bytype(dev, vport, enable, type);
 		if (err)
 			return err;
-		err = esw_ipsec_vf_set_generic(dev, vport->vport, enable);
+		err = mlx5_esw_ipsec_vf_offload_get(dev, vport, &crypto_enabled, &packet_enabled);
 		if (err)
 			return err;
+
+		/* The generic ipsec_offload cap can be disabled only if both
+		 * ipsec_crypto_offload and ipsec_full_offload aren't enabled.
+		 */
+		if (!crypto_enabled && !packet_enabled) {
+			err = esw_ipsec_vf_set_generic(dev, vport->vport, enable);
+			if (err)
+				return err;
+		}
 	}
 
 	if (type == MLX5_ESW_VPORT_IPSEC_CRYPTO_OFFLOAD)
 		vport->info.ipsec_crypto_enabled = enable;
+	else if (type == MLX5_ESW_VPORT_IPSEC_PACKET_OFFLOAD)
+		vport->info.ipsec_packet_enabled = enable;
 
 	return err;
 }
@@ -304,9 +323,42 @@ notsupported:
 	return false;
 }
 
-int mlx5_esw_ipsec_vf_offload_get(struct mlx5_core_dev *dev, struct mlx5_vport *vport, bool *crypto)
+bool mlx5_esw_ipsec_vf_packet_offload_supported(struct mlx5_core_dev *dev, u16 vport_num, int *err)
 {
-	return esw_ipsec_vf_query(dev, vport, crypto);
+	int query_sz = MLX5_ST_SZ_BYTES(query_hca_cap_out);
+	void *hca_cap = NULL, *query_cap = NULL;
+
+	if (!mlx5_esw_ipsec_vf_offload_supported(dev))
+		return false;
+
+	if (!esw_ipsec_offload_supported(dev, vport_num, err))
+		return false;
+
+	query_cap = kvzalloc(query_sz, GFP_KERNEL);
+	if (!query_cap) {
+		*err = -ENOMEM;
+		return false;
+	}
+
+	*err = mlx5_vport_get_other_func_cap(dev, vport_num, query_cap, MLX5_CAP_FLOW_TABLE);
+	if (*err)
+		goto notsupported;
+	hca_cap = MLX5_ADDR_OF(query_hca_cap_out, query_cap, capability);
+	if (!MLX5_GET(flow_table_nic_cap, hca_cap, flow_table_properties_nic_receive.decap))
+		goto notsupported;
+
+	kvfree(query_cap);
+	return true;
+
+notsupported:
+	kvfree(query_cap);
+	return false;
+}
+
+int mlx5_esw_ipsec_vf_offload_get(struct mlx5_core_dev *dev, struct mlx5_vport *vport,
+				  bool *crypto, bool *packet)
+{
+	return esw_ipsec_vf_query(dev, vport, crypto, packet);
 }
 
 int mlx5_esw_ipsec_vf_crypto_offload_set(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
@@ -314,4 +366,11 @@ int mlx5_esw_ipsec_vf_crypto_offload_set(struct mlx5_eswitch *esw, struct mlx5_v
 {
 	return esw_ipsec_vf_offload_set_bytype(esw, vport, enable,
 					       MLX5_ESW_VPORT_IPSEC_CRYPTO_OFFLOAD);
+}
+
+int mlx5_esw_ipsec_vf_packet_offload_set(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
+					 bool enable)
+{
+	return esw_ipsec_vf_offload_set_bytype(esw, vport, enable,
+					       MLX5_ESW_VPORT_IPSEC_PACKET_OFFLOAD);
 }
