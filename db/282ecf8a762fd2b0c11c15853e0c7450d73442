@@ -1,3 +1,7 @@
+Changes V4 -> V5:
+
+- Make clang happy.
+
 Changes V3 -> V4:
 
 - Refactor the patch to leverage the refresh code and new flow 'ext_data'
