@@ -1,0 +1,4 @@
+Changes V5 -> V6:
+
+- Update to use flow_offload NF_FLOW_HW_ESTABLISHED bit instead of
+ext_data pointer.
