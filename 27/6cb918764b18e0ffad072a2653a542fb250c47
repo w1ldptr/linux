@@ -1,0 +1,14 @@
+Changes V5 -> V6:
+
+- Use NF_FLOW_HW_ESTABLISHED bit instead of ext_data pointer to determine
+the ctinfo of last offload call.
+
+Changes V4 -> V5:
+
+- Make clang happy.
+
+Changes V3 -> V4:
+
+- Refactor the patch to leverage the refresh code and new flow 'ext_data'
+field in order to change the offload state instead of relying on async gc
+update.
