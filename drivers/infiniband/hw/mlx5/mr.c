@@ -1033,7 +1033,15 @@ void mlx5_mkey_cache_cleanup(struct mlx5_ib_dev *dev)
 		xa_lock_irq(&ent->mkeys);
 		ent->disabled = true;
 		xa_unlock_irq(&ent->mkeys);
-		cancel_delayed_work_sync(&ent->dwork);
+	}
+
+	/* Run the canceling of delayed works on the cache in a separate loop after
+	 * disabling all entries to ensure someone_adding() will not try taking the
+	 * rb_lock while flushing the workqueue.
+	 */
+	for (node = rb_first(root); node; node = rb_next(node)) {
+		ent = rb_entry(node, struct mlx5_cache_ent, node);
+		cancel_delayed_work(&ent->dwork);
 	}
 
 	mlx5_mkey_cache_debugfs_cleanup(dev);
