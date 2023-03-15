@@ -1242,7 +1242,8 @@ void mlx5e_build_nic_params(struct mlx5e_priv *priv, struct mlx5e_xsk *xsk, u16 
 void mlx5e_rx_dim_work(struct work_struct *work);
 void mlx5e_tx_dim_work(struct work_struct *work);
 
-void mlx5e_set_xdp_feature(struct net_device *netdev);
+xdp_features_t mlx5e_xdp_supported_features(struct mlx5e_params *params);
+void mlx5e_xdp_update_features(struct net_device *netdev);
 netdev_features_t mlx5e_features_check(struct sk_buff *skb,
 				       struct net_device *netdev,
 				       netdev_features_t features);

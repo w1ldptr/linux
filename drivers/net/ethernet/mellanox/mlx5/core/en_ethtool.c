@@ -2011,7 +2011,7 @@ static int set_pflag_rx_striding_rq(struct net_device *netdev, bool enable)
 		return err;
 
 	/* update XDP supported features */
-	mlx5e_set_xdp_feature(netdev);
+	mlx5e_xdp_update_features(netdev);
 
 	return 0;
 }

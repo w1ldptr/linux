@@ -4004,22 +4004,29 @@ static int mlx5e_handle_feature(struct net_device *netdev,
 	return 0;
 }
 
-void mlx5e_set_xdp_feature(struct net_device *netdev)
+xdp_features_t mlx5e_xdp_supported_features(struct mlx5e_params *params)
+{
+	xdp_features_t val;
+
+	if (params->packet_merge.type != MLX5E_PACKET_MERGE_NONE)
+		return 0;
+
+	val = NETDEV_XDP_ACT_BASIC |
+		NETDEV_XDP_ACT_REDIRECT |
+		NETDEV_XDP_ACT_XSK_ZEROCOPY |
+		NETDEV_XDP_ACT_NDO_XMIT;
+	if (params->rq_wq_type == MLX5_WQ_TYPE_CYCLIC)
+		val |= NETDEV_XDP_ACT_RX_SG;
+	return val;
+}
+
+void mlx5e_xdp_update_features(struct net_device *netdev)
 {
 	struct mlx5e_priv *priv = netdev_priv(netdev);
 	struct mlx5e_params *params = &priv->channels.params;
 	xdp_features_t val;
 
-	if (params->packet_merge.type != MLX5E_PACKET_MERGE_NONE) {
-		xdp_clear_features_flag(netdev);
-		return;
-	}
-
-	val = NETDEV_XDP_ACT_BASIC | NETDEV_XDP_ACT_REDIRECT |
-	      NETDEV_XDP_ACT_XSK_ZEROCOPY |
-	      NETDEV_XDP_ACT_NDO_XMIT;
-	if (params->rq_wq_type == MLX5_WQ_TYPE_CYCLIC)
-		val |= NETDEV_XDP_ACT_RX_SG;
+	val = mlx5e_xdp_supported_features(params);
 	xdp_set_features_flag(netdev, val);
 }
 
@@ -4050,7 +4057,7 @@ int mlx5e_set_features(struct net_device *netdev, netdev_features_t features)
 	}
 
 	/* update XDP supported features */
-	mlx5e_set_xdp_feature(netdev);
+	mlx5e_xdp_update_features(netdev);
 
 	return 0;
 }
@@ -4994,6 +5001,7 @@ void mlx5e_build_nic_params(struct mlx5e_priv *priv, struct mlx5e_xsk *xsk, u16 
 	 * on mlx5e_attach_netdev() we will call mlx5e_update_features()
 	 * To update netdev->features please modify mlx5e_fix_features()
 	 */
+	priv->netdev->xdp_features = mlx5e_xdp_supported_features(params);
 }
 
 static void mlx5e_set_netdev_dev_addr(struct net_device *netdev)
@@ -5187,7 +5195,6 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 	netdev->priv_flags       |= IFF_UNICAST_FLT;
 
 	netif_set_tso_max_size(netdev, GSO_MAX_SIZE);
-	mlx5e_set_xdp_feature(netdev);
 	mlx5e_set_netdev_dev_addr(netdev);
 	mlx5e_macsec_build_netdev(priv);
 	mlx5e_ipsec_build_netdev(priv);
@@ -5259,8 +5266,6 @@ static int mlx5e_nic_init(struct mlx5_core_dev *mdev,
 		mlx5_core_err(mdev, "TLS initialization failed, %d\n", err);
 
 	mlx5e_health_create_reporters(priv);
-	/* update XDP supported features */
-	mlx5e_set_xdp_feature(netdev);
 
 	return 0;
 }
