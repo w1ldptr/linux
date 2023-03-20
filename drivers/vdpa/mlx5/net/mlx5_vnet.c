@@ -2298,10 +2298,62 @@ static void update_cvq_info(struct mlx5_vdpa_dev *mvdev)
 	}
 }
 
+static bool f_status_was_set(u64 old, u64 new)
+{
+	if (!(old & BIT_ULL(VIRTIO_NET_F_STATUS)) &&
+	    (new & BIT_ULL(VIRTIO_NET_F_STATUS)))
+		return true;
+
+	return false;
+}
+
+static u8 query_vport_state(struct mlx5_core_dev *mdev, u8 opmod, u16 vport)
+{
+	u32 out[MLX5_ST_SZ_DW(query_vport_state_out)] = {};
+	u32 in[MLX5_ST_SZ_DW(query_vport_state_in)] = {};
+	int err;
+
+	MLX5_SET(query_vport_state_in, in, opcode, MLX5_CMD_OP_QUERY_VPORT_STATE);
+	MLX5_SET(query_vport_state_in, in, op_mod, opmod);
+	MLX5_SET(query_vport_state_in, in, vport_number, vport);
+	if (vport)
+		MLX5_SET(query_vport_state_in, in, other_vport, 1);
+
+	err = mlx5_cmd_exec_inout(mdev, query_vport_state, in, out);
+	if (err)
+		return 0;
+
+	return MLX5_GET(query_vport_state_out, out, state);
+}
+
+static bool get_link_state(struct mlx5_vdpa_dev *mvdev)
+{
+	if (query_vport_state(mvdev->mdev, MLX5_VPORT_STATE_OP_MOD_VNIC_VPORT, 0) ==
+	    VPORT_STATE_UP)
+		return true;
+
+	return false;
+}
+
+static void update_link_state(struct mlx5_vdpa_dev *mvdev)
+{
+	struct mlx5_vdpa_net *ndev = to_mlx5_vdpa_ndev(mvdev);
+	bool up;
+
+	up = get_link_state(mvdev);
+	spin_lock(&ndev->status_lock);
+	if (up)
+		ndev->config.status |= cpu_to_mlx5vdpa16(mvdev, VIRTIO_NET_S_LINK_UP);
+	else
+		ndev->config.status &= cpu_to_mlx5vdpa16(mvdev, ~VIRTIO_NET_S_LINK_UP);
+	spin_unlock(&ndev->status_lock);
+}
+
 static int mlx5_vdpa_set_driver_features(struct vdpa_device *vdev, u64 features)
 {
 	struct mlx5_vdpa_dev *mvdev = to_mvdev(vdev);
 	struct mlx5_vdpa_net *ndev = to_mlx5_vdpa_ndev(mvdev);
+	u64 cur_features;
 	int err;
 
 	print_features(mvdev, features, true);
@@ -2310,7 +2362,11 @@ static int mlx5_vdpa_set_driver_features(struct vdpa_device *vdev, u64 features)
 	if (err)
 		return err;
 
+	cur_features = ndev->mvdev.actual_features;
 	ndev->mvdev.actual_features = features & ndev->mvdev.mlx_features;
+	if (f_status_was_set(cur_features, ndev->mvdev.actual_features))
+		update_link_state(mvdev);
+
 	if (ndev->mvdev.actual_features & BIT_ULL(VIRTIO_NET_F_MQ))
 		ndev->rqt_size = mlx5vdpa16_to_cpu(mvdev, ndev->config.max_virtqueue_pairs);
 	else
@@ -3000,34 +3056,6 @@ struct mlx5_vdpa_mgmtdev {
 	struct mlx5_vdpa_net *ndev;
 };
 
-static u8 query_vport_state(struct mlx5_core_dev *mdev, u8 opmod, u16 vport)
-{
-	u32 out[MLX5_ST_SZ_DW(query_vport_state_out)] = {};
-	u32 in[MLX5_ST_SZ_DW(query_vport_state_in)] = {};
-	int err;
-
-	MLX5_SET(query_vport_state_in, in, opcode, MLX5_CMD_OP_QUERY_VPORT_STATE);
-	MLX5_SET(query_vport_state_in, in, op_mod, opmod);
-	MLX5_SET(query_vport_state_in, in, vport_number, vport);
-	if (vport)
-		MLX5_SET(query_vport_state_in, in, other_vport, 1);
-
-	err = mlx5_cmd_exec_inout(mdev, query_vport_state, in, out);
-	if (err)
-		return 0;
-
-	return MLX5_GET(query_vport_state_out, out, state);
-}
-
-static bool get_link_state(struct mlx5_vdpa_dev *mvdev)
-{
-	if (query_vport_state(mvdev->mdev, MLX5_VPORT_STATE_OP_MOD_VNIC_VPORT, 0) ==
-	    VPORT_STATE_UP)
-		return true;
-
-	return false;
-}
-
 static void update_carrier(struct work_struct *work)
 {
 	struct mlx5_vdpa_wq_ent *wqent;
@@ -3037,11 +3065,7 @@ static void update_carrier(struct work_struct *work)
 	wqent = container_of(work, struct mlx5_vdpa_wq_ent, work);
 	mvdev = wqent->mvdev;
 	ndev = to_mlx5_vdpa_ndev(mvdev);
-	if (get_link_state(mvdev))
-		ndev->config.status |= cpu_to_mlx5vdpa16(mvdev, VIRTIO_NET_S_LINK_UP);
-	else
-		ndev->config.status &= cpu_to_mlx5vdpa16(mvdev, ~VIRTIO_NET_S_LINK_UP);
-
+	update_link_state(mvdev);
 	if (ndev->nb_registered && ndev->config_cb.callback)
 		ndev->config_cb.callback(ndev->config_cb.private);
 
@@ -3177,6 +3201,7 @@ static int mlx5_vdpa_dev_add(struct vdpa_mgmt_dev *v_mdev, const char *name,
 
 	init_mvqs(ndev);
 	init_rwsem(&ndev->reslock);
+	spin_lock_init(&ndev->status_lock);
 	config = &ndev->config;
 
 	if (add_config->mask & BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MTU)) {

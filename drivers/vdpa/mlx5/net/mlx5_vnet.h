@@ -50,6 +50,8 @@ struct mlx5_vdpa_net {
 	struct mlx5_vdpa_wq_ent cvq_ent;
 	struct hlist_head macvlan_hash[MLX5V_MACVLAN_SIZE];
 	struct dentry *debugfs;
+	/* serialize link status updates */
+	spinlock_t status_lock;
 };
 
 struct mlx5_vdpa_counter {
