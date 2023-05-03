@@ -642,6 +642,11 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 		 */
 		if (test_bit(IPS_ASSURED_BIT, &ct->status))
 			set_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags);
+		else if (!test_bit(IPS_SEEN_REPLY_BIT, &ct->status))
+			/* Let the ct update connection state by processing
+			 * reply-direction packet.
+			 */
+			return false;
 		else if (test_bit(NF_FLOW_HW_ESTABLISHED, &flow->flags))
 			/* If flow_table flow has already been updated to the
 			 * established state, then don't refresh.
