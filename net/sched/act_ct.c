@@ -372,6 +372,7 @@ static void tcf_ct_flow_table_add(struct tcf_ct_flow_table *ct_ft,
 				  bool tcp, bool bidirectional)
 {
 	struct nf_conn_act_ct_ext *act_ct_ext;
+	struct flow_offload_tuple *ft;
 	struct flow_offload *entry;
 	int err;
 
@@ -397,6 +398,12 @@ static void tcf_ct_flow_table_add(struct tcf_ct_flow_table *ct_ft,
 		tcf_ct_flow_tc_ifidx(entry, act_ct_ext, FLOW_OFFLOAD_DIR_REPLY);
 	}
 
+	ft = &entry->tuplehash[0].tuple;
+	if (ft->l4proto == IPPROTO_UDP)
+		printk(KERN_WARNING"ADD UDP %s (%pI4,%u -> %pI4,%u) %u %p\n",
+		       test_bit(IPS_ASSURED_BIT, &ct->status) ? "bidir" : "",
+		       &ft->src_v4, ft->src_port, &ft->dst_v4, ft->dst_port,
+		       ct->zone.id, ct);
 	err = flow_offload_add(&ct_ft->nf_ft, entry);
 	if (err)
 		goto err_add;
@@ -637,6 +644,12 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 
 	if (dir == FLOW_OFFLOAD_DIR_REPLY &&
 	    !test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags)) {
+		printk(KERN_WARNING"REPLY UDP (%pI4,%u -> %pI4, %u) %s %s %s %u %p\n",
+		       &tuple.src_v4, tuple.src_port, &tuple.dst_v4, tuple.dst_port,
+		       test_bit(IPS_ASSURED_BIT, &ct->status) ? "assured" : "",
+		       test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ? "seen" : "",
+		       test_bit(NF_FLOW_HW_ESTABLISHED, &flow->flags) ? "hwestablished" : "",
+		       ct->zone.id, ct);
 		/* Only offload reply direction after connection became
 		 * assured.
 		 */
@@ -664,6 +677,12 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 			IP_CT_ESTABLISHED : IP_CT_NEW;
 	else
 		ctinfo = IP_CT_ESTABLISHED_REPLY;
+
+	if (tuple.l4proto == IPPROTO_UDP)
+		printk(KERN_WARNING"REFRESH UDP %s (%pI4,%u -> %pI4, %u) %u %p\n",
+		       test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags) ? "bidir" : "",
+		       &tuple.src_v4, tuple.src_port, &tuple.dst_v4, tuple.dst_port,
+		       ct->zone.id, ct);
 
 	flow_offload_refresh(nf_ft, flow);
 	nf_conntrack_get(&ct->ct_general);
