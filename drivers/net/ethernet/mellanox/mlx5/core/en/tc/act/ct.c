@@ -28,6 +28,7 @@ tc_act_parse_ct(struct mlx5e_tc_act_parse_state *parse_state,
 		struct mlx5e_priv *priv,
 		struct mlx5_flow_attr *attr)
 {
+	bool clear_action = act->ct.action & TCA_CT_ACT_CLEAR;
 	int err;
 
 	err = mlx5_tc_ct_parse_action(parse_state->ct_priv, attr, act, parse_state->extack);
@@ -38,6 +39,10 @@ tc_act_parse_ct(struct mlx5e_tc_act_parse_state *parse_state,
 		attr->esw_attr->split_count = attr->esw_attr->out_count;
 
 	attr->flags |= MLX5_ATTR_FLAG_CT;
+	if (!clear_action) {
+		parse_state->ct = true;
+	}
+
 
 	return 0;
 }
