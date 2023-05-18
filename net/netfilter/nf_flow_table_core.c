@@ -327,7 +327,7 @@ void flow_offload_refresh(struct nf_flowtable *flow_table,
 	if (timeout - READ_ONCE(flow->timeout) > HZ)
 		WRITE_ONCE(flow->timeout, timeout);
 	else {
-		printk(KERN_WARNING"REFRESH NOT IN HW\n");
+		printk(KERN_WARNING"REFRESH TIMEOUT %d %d\n", timeout - READ_ONCE(flow->timeout), HZ);
 		return;
 	}
 
