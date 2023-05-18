@@ -400,8 +400,8 @@ static void tcf_ct_flow_table_add(struct tcf_ct_flow_table *ct_ft,
 
 	ft = &entry->tuplehash[0].tuple;
 	if (ft->l4proto == IPPROTO_UDP)
-		printk(KERN_WARNING"ADD UDP %s (%pI4,%u -> %pI4,%u) %u %p\n",
-		       test_bit(IPS_ASSURED_BIT, &ct->status) ? "bidir" : "",
+		printk(KERN_WARNING"ADD UDP %lx %s (%pI4,%u -> %pI4,%u) %u %p\n",
+		       entry->flags, test_bit(IPS_ASSURED_BIT, &ct->status) ? "bidir" : "",
 		       &ft->src_v4, ft->src_port, &ft->dst_v4, ft->dst_port,
 		       ct->zone.id, ct);
 	err = flow_offload_add(&ct_ft->nf_ft, entry);
@@ -411,6 +411,11 @@ static void tcf_ct_flow_table_add(struct tcf_ct_flow_table *ct_ft,
 	return;
 
 err_add:
+	if (ft->l4proto == IPPROTO_UDP)
+		printk(KERN_WARNING"ERR %d ADD UDP %s (%pI4,%u -> %pI4,%u) %u %p\n",
+		       err, test_bit(IPS_ASSURED_BIT, &ct->status) ? "bidir" : "",
+		       &ft->src_v4, ft->src_port, &ft->dst_v4, ft->dst_port,
+		       ct->zone.id, ct);
 	flow_offload_free(entry);
 err_alloc:
 	clear_bit(IPS_OFFLOAD_BIT, &ct->status);

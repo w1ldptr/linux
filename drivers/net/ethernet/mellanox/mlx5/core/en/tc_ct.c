@@ -363,7 +363,7 @@ mlx5_tc_ct_get_flow_source_match(struct mlx5_tc_ct_priv *ct_priv,
 }
 
 static void
-print_5t(struct flow_rule *rule, struct nf_conn *ct, enum ip_conntrack_info ctinfo, const char *act)
+print_5t(struct flow_rule *rule, struct nf_conn *ct, enum ip_conntrack_info ctinfo, const char *act, int err)
 {
 	struct flow_match_ports pmatch;
 	struct flow_match_ipv4_addrs amatch;
@@ -393,10 +393,10 @@ print_5t(struct flow_rule *rule, struct nf_conn *ct, enum ip_conntrack_info ctin
 		flow_rule_match_ports(rule, &pmatch);
 	}
 
-	printk(KERN_WARNING"OFFLOAD %s UDP (%pI4,%u -> %pI4,%u) %s %u %p\n",
+	printk(KERN_WARNING"OFFLOAD %s UDP (%pI4,%u -> %pI4,%u) %s %u %p (err=%d)\n",
 	       act, &amatch.key->src, pmatch.key->src, &amatch.key->dst, pmatch.key->dst,
 	       ctinfo == IP_CT_NEW ? "new" : "est",
-	       ct->zone.id, ct);
+	       ct->zone.id, ct, err);
 }
 
 static int
@@ -1227,14 +1227,14 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 	if (entry && refcount_inc_not_zero(&entry->refcnt)) {
 		if (entry->restore_cookie == meta_action->ct_metadata.cookie) {
 			spin_unlock_bh(&ct_priv->ht_lock);
-			print_5t(flow_rule, ct, ctinfo, "DUP");
+			print_5t(flow_rule, ct, ctinfo, "DUP", 0);
 			mlx5_tc_ct_entry_put(entry);
 			return -EEXIST;
 		}
 		entry->restore_cookie = meta_action->ct_metadata.cookie;
 		spin_unlock_bh(&ct_priv->ht_lock);
 
-		print_5t(flow_rule, ct, ctinfo, "REPLACE");
+		print_5t(flow_rule, ct, ctinfo, "REPLACE", 0);
 		err = mlx5_tc_ct_block_flow_offload_replace(ft, flow_rule, entry, cookie);
 		mlx5_tc_ct_entry_put(entry);
 		return err;
@@ -1282,7 +1282,7 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 	}
 	spin_unlock_bh(&ct_priv->ht_lock);
 
-	print_5t(flow_rule, ct, ctinfo, "NEW");
+	print_5t(flow_rule, ct, ctinfo, "NEW", 0);
 	err = mlx5_tc_ct_entry_add_rules(ct_priv, flow_rule, entry,
 					 ft->zone_restore_id);
 	if (err)
@@ -1309,6 +1309,7 @@ err_tuple:
 err_entries:
 	spin_unlock_bh(&ct_priv->ht_lock);
 err_set:
+	print_5t(flow_rule, ct, ctinfo, "ERR", err);
 	kfree(entry);
 	if (err != -EEXIST)
 		netdev_warn(ct_priv->netdev, "Failed to offload ct entry, err: %d\n", err);
