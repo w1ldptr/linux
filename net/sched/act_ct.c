@@ -684,8 +684,8 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 		ctinfo = IP_CT_ESTABLISHED_REPLY;
 
 	if (tuple.l4proto == IPPROTO_UDP)
-		printk(KERN_WARNING"REFRESH UDP %s (%pI4,%u -> %pI4, %u) %u %p\n",
-		       test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags) ? "bidir" : "",
+		printk(KERN_WARNING"REFRESH UDP %lx %s (%pI4,%u -> %pI4, %u) %u %p\n",
+		       flow->flags, test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags) ? "bidir" : "",
 		       &tuple.src_v4, tuple.src_port, &tuple.dst_v4, tuple.dst_port,
 		       ct->zone.id, ct);
 
