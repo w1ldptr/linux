@@ -396,7 +396,7 @@ print_5t(struct flow_rule *rule, struct nf_conn *ct, enum ip_conntrack_info ctin
 	printk(KERN_WARNING"OFFLOAD %s UDP (%pI4,%u -> %pI4,%u) %s %u %p (err=%d)\n",
 	       act, &amatch.key->src, pmatch.key->src, &amatch.key->dst, pmatch.key->dst,
 	       ctinfo == IP_CT_NEW ? "new" : "est",
-	       ct->zone.id, ct, err);
+	       ct ? ct->zone.id : 0, ct, err);
 }
 
 static int
@@ -1216,10 +1216,12 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 	struct nf_conn *ct;
 	int err;
 
-	print_5t(flow_rule, ct, ctinfo, "ENTER", 0);
+	print_5t(flow_rule, 0, IP_CT_NEW, "ENTER", 0);
 	meta_action = mlx5_tc_ct_get_ct_metadata_action(flow_rule);
-	if (!meta_action)
+	if (!meta_action) {
+		printk(KERN_WARNING"NO META");
 		return -EOPNOTSUPP;
+	}
 	ctinfo = meta_action->ct_metadata.cookie & NFCT_INFOMASK;
 	ct = (struct nf_conn *)(meta_action->ct_metadata.cookie & NFCT_PTRMASK);
 
