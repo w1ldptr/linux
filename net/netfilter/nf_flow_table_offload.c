@@ -848,11 +848,15 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
 
 	nf_flow_offload_init(&cls_flow, proto, priority, cmd,
 			     &flow->tuplehash[dir].tuple, &extack);
-	if (cmd == FLOW_CLS_REPLACE)
+	if (cmd == FLOW_CLS_REPLACE) {
+		printk(KERN_WARNING"START REPLACE\n");
 		cls_flow.rule = flow_rule->rule;
+	}
 
 	down_read(&flowtable->flow_block_lock);
 	list_for_each_entry(block_cb, block_cb_list, list) {
+		if (cmd == FLOW_CLS_REPLACE)
+			printk(KERN_WARNING"%d REPLACE\n", i);
 		err = block_cb->cb(TC_SETUP_CLSFLOWER, &cls_flow,
 				   block_cb->cb_priv);
 		if (err < 0)
