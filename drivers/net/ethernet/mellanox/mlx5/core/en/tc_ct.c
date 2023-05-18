@@ -1216,6 +1216,7 @@ mlx5_tc_ct_block_flow_offload_add(struct mlx5_ct_ft *ft,
 	struct nf_conn *ct;
 	int err;
 
+	print_5t(flow_rule, ct, ctinfo, "ENTER", 0);
 	meta_action = mlx5_tc_ct_get_ct_metadata_action(flow_rule);
 	if (!meta_action)
 		return -EOPNOTSUPP;
