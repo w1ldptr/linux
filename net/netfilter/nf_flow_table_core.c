@@ -310,6 +310,8 @@ int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow)
 	if (nf_flowtable_hw_offload(flow_table)) {
 		__set_bit(NF_FLOW_HW, &flow->flags);
 		nf_flow_offload_add(flow_table, flow);
+	} else {
+		printk(KERN_WARNING"ADD NOT IN HW\n");
 	}
 
 	return 0;
@@ -324,11 +326,15 @@ void flow_offload_refresh(struct nf_flowtable *flow_table,
 	timeout = nf_flowtable_time_stamp + flow_offload_get_timeout(flow);
 	if (timeout - READ_ONCE(flow->timeout) > HZ)
 		WRITE_ONCE(flow->timeout, timeout);
-	else
+	else {
+		printk(KERN_WARNING"REFRESH NOT IN HW\n");
 		return;
+	}
 
-	if (likely(!nf_flowtable_hw_offload(flow_table)))
+	if (likely(!nf_flowtable_hw_offload(flow_table))) {
+		printk(KERN_WARNING"REFRESH NOT IN HW\n");
 		return;
+	}
 
 	nf_flow_offload_add(flow_table, flow);
 }
