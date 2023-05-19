@@ -1849,6 +1849,7 @@ mlx5_tc_ct_add_ft_cb(struct mlx5_tc_ct_priv *ct_priv, u16 zone,
 	ft = rhashtable_lookup_fast(&ct_priv->zone_ht, &zone, zone_params);
 	if (ft) {
 		refcount_inc(&ft->refcount);
+		printk(KERN_WARNING"MLX5 ft %p (%u) zone %d found!\n", ft, refcount_read(&ft->refcount), zone);
 		return ft;
 	}
 
@@ -1884,6 +1885,7 @@ mlx5_tc_ct_add_ft_cb(struct mlx5_tc_ct_priv *ct_priv, u16 zone,
 					   mlx5_tc_ct_block_flow_offload, ft);
 	if (err)
 		goto err_add_cb;
+	printk(KERN_WARNING"MLX5 ft %p zone %d added!\n", ft, zone);
 
 	return ft;
 
