@@ -1198,12 +1198,15 @@ int nf_flow_table_offload_setup(struct nf_flowtable *flowtable,
 	if (!nf_flowtable_hw_offload(flowtable))
 		return 0;
 
-	if (dev->netdev_ops->ndo_setup_tc)
+	if (dev->netdev_ops->ndo_setup_tc) {
+		WARN(1, "NF_FLOW_TABLE setup");
 		err = nf_flow_table_offload_cmd(&bo, flowtable, dev, cmd,
 						&extack);
-	else
+	} else {
+		WARN(1, "NF_FLOW_TABLE setup indir");
 		err = nf_flow_table_indr_offload_cmd(&bo, flowtable, dev, cmd,
 						     &extack);
+	}
 	if (err < 0)
 		return err;
 
