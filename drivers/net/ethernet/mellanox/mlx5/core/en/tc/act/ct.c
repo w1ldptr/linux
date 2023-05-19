@@ -43,6 +43,7 @@ tc_act_parse_ct(struct mlx5e_tc_act_parse_state *parse_state,
 		parse_state->ct = true;
 	}
 
+	printk(KERN_WARNING"PARSING CT zone %d\n", attr->ct_attr.zone);
 
 	return 0;
 }
@@ -55,6 +56,7 @@ tc_act_post_parse_ct(struct mlx5e_tc_act_parse_state *parse_state,
 	if (!(attr->flags & MLX5_ATTR_FLAG_CT))
 		return 0;
 
+	printk(KERN_WARNING"POST PARSING CT zone %d\n", attr->ct_attr.zone);
 	return mlx5_tc_ct_flow_offload(parse_state->ct_priv, attr);
 }
 
