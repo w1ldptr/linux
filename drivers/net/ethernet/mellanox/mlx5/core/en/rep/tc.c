@@ -240,6 +240,7 @@ int mlx5e_rep_setup_tc(struct net_device *dev, enum tc_setup_type type,
 
 	switch (type) {
 	case TC_SETUP_BLOCK:
+		WARN(1, "SETUP TC");
 		return flow_block_cb_setup_simple(type_data,
 						  &mlx5e_rep_block_tc_cb_list,
 						  mlx5e_rep_setup_tc_cb,
@@ -656,6 +657,7 @@ int mlx5e_rep_indr_setup_cb(struct net_device *netdev, struct Qdisc *sch, void *
 
 	switch (type) {
 	case TC_SETUP_BLOCK:
+		WARN(1, "SETUP TC indir");
 		return mlx5e_rep_indr_setup_block(netdev, sch, cb_priv, type_data,
 						  mlx5e_rep_indr_setup_tc_cb,
 						  data, cleanup);
