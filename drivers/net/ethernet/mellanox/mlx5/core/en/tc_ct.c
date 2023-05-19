@@ -1913,6 +1913,7 @@ mlx5_tc_ct_flush_ft_entry(void *ptr, void *arg)
 static void
 mlx5_tc_ct_del_ft_cb(struct mlx5_tc_ct_priv *ct_priv, struct mlx5_ct_ft *ft)
 {
+	printk(KERN_WARNING"MLX5 ft %p (%u) zone %d release!\n", ft, refcount_read(&ft->refcount), ft->zone);
 	if (!refcount_dec_and_test(&ft->refcount))
 		return;
 
