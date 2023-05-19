@@ -31,11 +31,15 @@ tc_act_post_parse_ct(struct mlx5e_tc_act_parse_state *parse_state,
 		     struct mlx5e_priv *priv,
 		     struct mlx5_flow_attr *attr)
 {
+	int err;
+
 	if (!(attr->flags & MLX5_ATTR_FLAG_CT))
 		return 0;
 
-	printk(KERN_WARNING"POST PARSING CT zone %d\n", attr->ct_attr.zone);
-	return mlx5_tc_ct_flow_offload(parse_state->ct_priv, attr);
+	err = mlx5_tc_ct_flow_offload(parse_state->ct_priv, attr);
+	printk(KERN_WARNING"POST PARSING CT priv=%p zone %d act %x ft %p (err=%d)\n",
+	       priv, attr->ct_attr.zone, attr->ct_attr.ct_action, attr->ct_attr.nf_ft, err);
+	return err;
 }
 
 static bool
