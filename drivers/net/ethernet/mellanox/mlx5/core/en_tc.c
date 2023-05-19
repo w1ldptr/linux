@@ -3967,6 +3967,7 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 			goto out_free_post_acts;
 		}
 
+		printk(KERN_WARNING"PARSING ACT %d type %d\n", i, act->id);
 		err = tc_act->parse_action(parse_state, act, priv, attr);
 		if (err)
 			goto out_free_post_acts;
