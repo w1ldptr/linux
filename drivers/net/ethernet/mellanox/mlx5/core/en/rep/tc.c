@@ -245,6 +245,7 @@ int mlx5e_rep_setup_tc(struct net_device *dev, enum tc_setup_type type,
 						  mlx5e_rep_setup_tc_cb,
 						  priv, priv, true);
 	case TC_SETUP_FT:
+		WARN(1, "SETUP FT");
 		return flow_block_cb_setup_simple(type_data,
 						  &mlx5e_rep_block_ft_cb_list,
 						  mlx5e_rep_setup_ft_cb,
@@ -659,6 +660,7 @@ int mlx5e_rep_indr_setup_cb(struct net_device *netdev, struct Qdisc *sch, void *
 						  mlx5e_rep_indr_setup_tc_cb,
 						  data, cleanup);
 	case TC_SETUP_FT:
+		WARN(1, "SETUP FT indir");
 		return mlx5e_rep_indr_setup_block(netdev, sch, cb_priv, type_data,
 						  mlx5e_rep_indr_setup_ft_cb,
 						  data, cleanup);
