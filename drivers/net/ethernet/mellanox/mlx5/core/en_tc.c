@@ -3939,10 +3939,10 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 	struct mlx5e_tc_flow *flow = parse_state->flow;
 	struct mlx5e_tc_jump_state jump_state = {};
 	struct mlx5_flow_attr *attr = flow->attr;
+	struct flow_action_entry *act, *prev_act;
 	enum mlx5_flow_namespace_type ns_type;
 	struct mlx5e_priv *priv = flow->priv;
 	struct mlx5_flow_attr *prev_attr;
-	struct flow_action_entry *act;
 	struct mlx5e_tc_act *tc_act;
 	bool is_missable;
 	int err, i;
@@ -3987,7 +3987,7 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		    i < flow_action->num_entries - 1)) {
 			is_missable = tc_act->is_missable ? tc_act->is_missable(act) : false;
 
-			err = mlx5e_tc_act_post_parse(parse_state, flow_action, attr, ns_type);
+			err = mlx5e_tc_act_post_parse(parse_state, act, attr, ns_type);
 			if (err)
 				goto out_free_post_acts;
 
@@ -4009,9 +4009,10 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		} else if (!tc_act->stats_action) {
 			prev_attr->tc_act_cookies[prev_attr->tc_act_cookies_count++] = act->cookie;
 		}
+		prev_act = act;
 	}
 
-	err = mlx5e_tc_act_post_parse(parse_state, flow_action, attr, ns_type);
+	err = mlx5e_tc_act_post_parse(parse_state, prev_act, attr, ns_type);
 	if (err)
 		goto out_free_post_acts;
 

@@ -84,29 +84,19 @@ mlx5e_tc_act_init_parse_state(struct mlx5e_tc_act_parse_state *parse_state,
 
 int
 mlx5e_tc_act_post_parse(struct mlx5e_tc_act_parse_state *parse_state,
-			struct flow_action *flow_action,
+			struct flow_action_entry *act,
 			struct mlx5_flow_attr *attr,
 			enum mlx5_flow_namespace_type ns_type)
 {
-	struct flow_action_entry *act;
 	struct mlx5e_tc_act *tc_act;
 	struct mlx5e_priv *priv;
-	int err = 0, i;
 
 	priv = parse_state->flow->priv;
+	tc_act = mlx5e_tc_act_get(act->id, ns_type);
+	if (!tc_act || !tc_act->post_parse)
+		return 0;
 
-	flow_action_for_each(i, act, flow_action) {
-		tc_act = mlx5e_tc_act_get(act->id, ns_type);
-		if (!tc_act || !tc_act->post_parse)
-			continue;
-
-		err = tc_act->post_parse(parse_state, priv, attr);
-		if (err)
-			goto out;
-	}
-
-out:
-	return err;
+	return tc_act->post_parse(parse_state, priv, attr);
 }
 
 int
