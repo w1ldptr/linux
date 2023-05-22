@@ -111,7 +111,7 @@ mlx5e_tc_act_init_parse_state(struct mlx5e_tc_act_parse_state *parse_state,
 			      struct netlink_ext_ack *extack);
 
 int
-mlx5e_tc_act_post_parse(struct mlx5e_tc_act_parse_state *parse_state,
+mlx5e_tc_act_post_parse(int from, int to, struct mlx5e_tc_act_parse_state *parse_state,
 			struct flow_action *flow_action,
 			struct mlx5_flow_attr *attr,
 			enum mlx5_flow_namespace_type ns_type);
