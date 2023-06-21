@@ -924,6 +924,16 @@ static void mlx5e_xfrm_update_curlft(struct xfrm_state *x)
 	x->curlft.bytes += bytes;
 }
 
+static void mlx5e_ipsec_del_policy(struct work_struct *_work)
+{
+	struct mlx5e_ipsec_work *work =
+		container_of(_work, struct mlx5e_ipsec_work, work);
+	struct mlx5e_ipsec_pol_entry *pol_entry = work->data;
+
+	mlx5e_accel_ipsec_fs_del_pol(pol_entry);
+	kfree(pol_entry);
+}
+
 static int mlx5e_xfrm_validate_policy(struct mlx5_core_dev *mdev,
 				      struct xfrm_policy *x,
 				      struct netlink_ext_ack *extack)
@@ -1009,6 +1019,7 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 {
 	struct net_device *netdev = x->xdo.real_dev;
 	struct mlx5e_ipsec_pol_entry *pol_entry;
+	struct mlx5e_ipsec_work *work;
 	struct mlx5e_priv *priv;
 	int err;
 
@@ -1028,6 +1039,9 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 
 	pol_entry->x = x;
 	pol_entry->ipsec = priv->ipsec;
+	work = &pol_entry->work;
+	INIT_WORK(&work->work, mlx5e_ipsec_del_policy);
+	pol_entry->work.data = pol_entry;
 
 	mlx5e_ipsec_build_accel_pol_attrs(pol_entry, &pol_entry->attrs);
 	err = mlx5e_accel_ipsec_fs_add_pol(pol_entry);
@@ -1046,15 +1060,10 @@ err_fs:
 static void mlx5e_xfrm_del_policy(struct xfrm_policy *x)
 {
 	struct mlx5e_ipsec_pol_entry *pol_entry = to_ipsec_pol_entry(x);
+	struct mlx5e_ipsec_work *work = &pol_entry->work;
+	struct mlx5e_ipsec *ipsec = pol_entry->ipsec;
 
-	mlx5e_accel_ipsec_fs_del_pol(pol_entry);
-}
-
-static void mlx5e_xfrm_free_policy(struct xfrm_policy *x)
-{
-	struct mlx5e_ipsec_pol_entry *pol_entry = to_ipsec_pol_entry(x);
-
-	kfree(pol_entry);
+	queue_work(ipsec->wq, &work->work);
 }
 
 static const struct xfrmdev_ops mlx5e_ipsec_xfrmdev_ops = {
@@ -1075,7 +1084,6 @@ static const struct xfrmdev_ops mlx5e_ipsec_packet_xfrmdev_ops = {
 	.xdo_dev_state_update_curlft = mlx5e_xfrm_update_curlft,
 	.xdo_dev_policy_add = mlx5e_xfrm_add_policy,
 	.xdo_dev_policy_delete = mlx5e_xfrm_del_policy,
-	.xdo_dev_policy_free = mlx5e_xfrm_free_policy,
 };
 
 void mlx5e_ipsec_build_netdev(struct mlx5e_priv *priv)

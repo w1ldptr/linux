@@ -234,6 +234,7 @@ struct mlx5_accel_pol_xfrm_attrs {
 struct mlx5e_ipsec_pol_entry {
 	struct xfrm_policy *x;
 	struct mlx5e_ipsec *ipsec;
+	struct mlx5e_ipsec_work work;
 	struct mlx5e_ipsec_rule ipsec_rule;
 	struct mlx5_accel_pol_xfrm_attrs attrs;
 };
