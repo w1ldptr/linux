@@ -21,7 +21,8 @@ void mlx5_ipsec_fs_roce_tx_destroy(struct mlx5_ipsec_fs *ipsec_roce,
 				   struct mlx5_core_dev *mdev);
 int mlx5_ipsec_fs_roce_tx_create(struct mlx5_core_dev *mdev,
 				 struct mlx5_ipsec_fs *ipsec_roce,
-				 struct mlx5_flow_table *pol_ft);
+				 struct mlx5_flow_table *pol_ft,
+				 bool from_event);
 void mlx5_ipsec_fs_roce_cleanup(struct mlx5_ipsec_fs *ipsec_roce);
 struct mlx5_ipsec_fs *mlx5_ipsec_fs_roce_init(struct mlx5_core_dev *mdev,
 					      struct mlx5_devcom_comp_dev **devcom);

@@ -23,6 +23,7 @@ struct mlx5_ipsec_rx_roce {
 	struct mlx5_flow_handle *nic_master_rule;
 	struct mlx5_flow_table *goto_alias_ft;
 	u32 alias_id;
+	char key[ACCESS_KEY_LEN];
 
 	struct mlx5_flow_table *ft_rdma;
 	struct mlx5_flow_namespace *ns_rdma;
@@ -34,6 +35,7 @@ struct mlx5_ipsec_tx_roce {
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_table *goto_alias_ft;
 	u32 alias_id;
+	char key[ACCESS_KEY_LEN];
 	struct mlx5_flow_namespace *ns;
 };
 
@@ -78,13 +80,12 @@ static bool ipsec_fs_create_alias_supported(struct mlx5_core_dev *mdev,
 static int ipsec_fs_create_aliased_ft(struct mlx5_core_dev *ibv_owner,
 				      struct mlx5_core_dev *ibv_allowed,
 				      struct mlx5_flow_table *ft,
-				      u32 *obj_id)
+				      u32 *obj_id, char *alias_key, bool from_event)
 {
 	u32 aliased_object_id = (ft->type << FT_ID_FT_TYPE_OFFSET) | ft->id;
 	u16 vhca_id_to_be_accessed = MLX5_CAP_GEN(ibv_owner, vhca_id);
 	struct mlx5_cmd_allow_other_vhca_access_attr allow_attr = {};
 	struct mlx5_cmd_alias_obj_create_attr alias_attr = {};
-	char key[ACCESS_KEY_LEN];
 	int ret;
 	int i;
 
@@ -92,20 +93,23 @@ static int ipsec_fs_create_aliased_ft(struct mlx5_core_dev *ibv_owner,
 		return -EOPNOTSUPP;
 
 	for (i = 0; i < ACCESS_KEY_LEN; i++)
-		key[i] = get_random_u64() & 0xFF;
+		if (!from_event)
+			alias_key[i] = get_random_u64() & 0xFF;
 
-	memcpy(allow_attr.access_key, key, ACCESS_KEY_LEN);
+	memcpy(allow_attr.access_key, alias_key, ACCESS_KEY_LEN);
 	allow_attr.obj_type = MLX5_GENERAL_OBJECT_TYPES_FLOW_TABLE_ALIAS;
 	allow_attr.obj_id = aliased_object_id;
 
-	ret = mlx5_cmd_allow_other_vhca_access(ibv_owner, &allow_attr);
-	if (ret) {
-		mlx5_core_err(ibv_owner, "Failed to allow other vhca access err=%d\n",
-			      ret);
-		return ret;
+	if (!from_event) {
+		ret = mlx5_cmd_allow_other_vhca_access(ibv_owner, &allow_attr);
+		if (ret) {
+			mlx5_core_err(ibv_owner, "Failed to allow other vhca access err=%d\n",
+				      ret);
+			return ret;
+		}
 	}
 
-	memcpy(alias_attr.access_key, key, ACCESS_KEY_LEN);
+	memcpy(alias_attr.access_key, alias_key, ACCESS_KEY_LEN);
 	alias_attr.obj_id = aliased_object_id;
 	alias_attr.obj_type = MLX5_GENERAL_OBJECT_TYPES_FLOW_TABLE_ALIAS;
 	alias_attr.vhca_id = vhca_id_to_be_accessed;
@@ -268,7 +272,8 @@ out:
 static int ipsec_fs_roce_tx_mpv_create_ft(struct mlx5_core_dev *mdev,
 					  struct mlx5_ipsec_tx_roce *roce,
 					  struct mlx5_flow_table *pol_ft,
-					  struct mlx5e_priv *peer_priv)
+					  struct mlx5e_priv *peer_priv,
+					  bool from_event)
 {
 	struct mlx5_flow_namespace *roce_ns, *nic_ns;
 	struct mlx5_flow_table_attr ft_attr = {};
@@ -284,7 +289,8 @@ static int ipsec_fs_roce_tx_mpv_create_ft(struct mlx5_core_dev *mdev,
 	if (!nic_ns)
 		return -EOPNOTSUPP;
 
-	err = ipsec_fs_create_aliased_ft(mdev, peer_priv->mdev, pol_ft, &roce->alias_id);
+	err = ipsec_fs_create_aliased_ft(mdev, peer_priv->mdev, pol_ft, &roce->alias_id, roce->key,
+					 from_event);
 	if (err)
 		return err;
 
@@ -365,7 +371,7 @@ destroy_group:
 static int ipsec_fs_roce_tx_mpv_create(struct mlx5_core_dev *mdev,
 				       struct mlx5_ipsec_fs *ipsec_roce,
 				       struct mlx5_flow_table *pol_ft,
-				       u32 *in)
+				       u32 *in, bool from_event)
 {
 	struct mlx5_devcom_comp_dev *tmp = NULL;
 	struct mlx5_ipsec_tx_roce *roce;
@@ -383,7 +389,7 @@ static int ipsec_fs_roce_tx_mpv_create(struct mlx5_core_dev *mdev,
 
 	roce = &ipsec_roce->tx;
 
-	err = ipsec_fs_roce_tx_mpv_create_ft(mdev, roce, pol_ft, peer_priv);
+	err = ipsec_fs_roce_tx_mpv_create_ft(mdev, roce, pol_ft, peer_priv, from_event);
 	if (err) {
 		mlx5_core_err(mdev, "Fail to create RoCE IPsec tables err=%d\n", err);
 		goto release_peer;
@@ -503,7 +509,7 @@ static int ipsec_fs_roce_rx_mpv_create(struct mlx5_core_dev *mdev,
 	roce->nic_master_group = g;
 
 	err = ipsec_fs_create_aliased_ft(peer_priv->mdev, mdev, roce->nic_master_ft,
-					 &roce->alias_id);
+					 &roce->alias_id, roce->key, false);
 	if (err) {
 		mlx5_core_err(mdev, "Fail to create RoCE IPsec rx alias FT err=%d\n", err);
 		goto destroy_group;
@@ -555,6 +561,9 @@ void mlx5_ipsec_fs_roce_tx_destroy(struct mlx5_ipsec_fs *ipsec_roce,
 
 	tx_roce = &ipsec_roce->tx;
 
+	if (!tx_roce->ft)
+		return; /* Incase RoCE was cleaned from MPV event flow */
+
 	mlx5_del_flow_rules(tx_roce->rule);
 	mlx5_destroy_flow_group(tx_roce->g);
 	mlx5_destroy_flow_table(tx_roce->ft);
@@ -575,11 +584,13 @@ void mlx5_ipsec_fs_roce_tx_destroy(struct mlx5_ipsec_fs *ipsec_roce,
 	mlx5_cmd_alias_obj_destroy(peer_priv->mdev, tx_roce->alias_id,
 				   MLX5_GENERAL_OBJECT_TYPES_FLOW_TABLE_ALIAS);
 	mlx5_devcom_for_each_peer_end(*ipsec_roce->devcom);
+	tx_roce->ft = NULL;
 }
 
 int mlx5_ipsec_fs_roce_tx_create(struct mlx5_core_dev *mdev,
 				 struct mlx5_ipsec_fs *ipsec_roce,
-				 struct mlx5_flow_table *pol_ft)
+				 struct mlx5_flow_table *pol_ft,
+				 bool from_event)
 {
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_ipsec_tx_roce *roce;
@@ -599,7 +610,7 @@ int mlx5_ipsec_fs_roce_tx_create(struct mlx5_core_dev *mdev,
 		return -ENOMEM;
 
 	if (mlx5_core_is_mp_slave(mdev)) {
-		err = ipsec_fs_roce_tx_mpv_create(mdev, ipsec_roce, pol_ft, in);
+		err = ipsec_fs_roce_tx_mpv_create(mdev, ipsec_roce, pol_ft, in, from_event);
 		goto free_in;
 	}
 
@@ -668,6 +679,8 @@ void mlx5_ipsec_fs_roce_rx_destroy(struct mlx5_ipsec_fs *ipsec_roce, u32 family,
 
 	rx_roce = (family == AF_INET) ? &ipsec_roce->ipv4_rx :
 					&ipsec_roce->ipv6_rx;
+	if (!rx_roce->ft)
+		return; /* Incase RoCE was cleaned from MPV event flow */
 
 	if (is_mpv_slave)
 		mlx5_del_flow_rules(rx_roce->nic_master_rule);
@@ -679,6 +692,7 @@ void mlx5_ipsec_fs_roce_rx_destroy(struct mlx5_ipsec_fs *ipsec_roce, u32 family,
 	mlx5_destroy_flow_group(rx_roce->roce_miss.group);
 	mlx5_destroy_flow_group(rx_roce->g);
 	mlx5_destroy_flow_table(rx_roce->ft);
+	rx_roce->ft = NULL;
 }
 
 int mlx5_ipsec_fs_roce_rx_create(struct mlx5_core_dev *mdev,
