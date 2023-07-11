@@ -380,8 +380,8 @@ static int vlan_device_event(struct notifier_block *unused, unsigned long event,
 
 	if ((event == NETDEV_UP) &&
 	    (dev->features & NETIF_F_HW_VLAN_CTAG_FILTER)) {
-		pr_info("adding VLAN 0 to HW filter on device %s\n",
-			dev->name);
+		pr_info("adding VLAN 0 to HW filter on device %s %p\n",
+			dev->name, dev);
 		vlan_vid_add(dev, htons(ETH_P_8021Q), 0);
 	}
 	if (event == NETDEV_DOWN &&
