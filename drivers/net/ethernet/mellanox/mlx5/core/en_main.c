@@ -5894,6 +5894,10 @@ int mlx5e_netdev_change_profile(struct mlx5e_priv *priv,
 	void *orig_ppriv = priv->ppriv;
 	int err, rollback_err;
 
+	rtnl_lock();
+	dev_close(netdev);
+	rtnl_unlock();
+
 	/* cleanup old profile */
 	mlx5e_detach_netdev(priv);
 	priv->profile->cleanup(priv);
@@ -5911,13 +5915,30 @@ int mlx5e_netdev_change_profile(struct mlx5e_priv *priv,
 		goto rollback;
 	}
 
-	return 0;
+	rtnl_lock();
+	err = dev_open(netdev, NULL);
+	rtnl_unlock();
+	if (err)
+		netdev_warn(netdev,
+			    "%s: failed to open netdev after installing new profile, %d\n",
+			    __func__, err);
+
+	return err;
 
 rollback:
 	rollback_err = mlx5e_netdev_attach_profile(netdev, mdev, orig_profile, orig_ppriv);
-	if (rollback_err)
+	if (rollback_err) {
 		netdev_err(netdev, "%s: failed to rollback to orig profile, %d\n",
 			   __func__, rollback_err);
+	} else {
+		rtnl_lock();
+		err = dev_open(netdev, NULL);
+		rtnl_unlock();
+		if (err)
+			netdev_warn(netdev, "%s: failed to open netdev after rollback, %d\n",
+				    __func__, err);
+	}
+
 	return err;
 }
 
