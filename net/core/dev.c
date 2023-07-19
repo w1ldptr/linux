@@ -8302,6 +8302,8 @@ static int __dev_set_promiscuity(struct net_device *dev, int inc, bool notify)
 
 	ASSERT_RTNL();
 
+	netdev_warn(dev, "DEBUG promisc old=%d count=%u inc=%d\n",
+		    (old_flags & IFF_PROMISC), dev->promiscuity, inc);
 	dev->flags |= IFF_PROMISC;
 	dev->promiscuity += inc;
 	if (dev->promiscuity == 0) {
