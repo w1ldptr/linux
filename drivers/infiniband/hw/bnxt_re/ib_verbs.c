@@ -1358,7 +1358,7 @@ static int bnxt_re_init_qp_attr(struct bnxt_re_qp *qp, struct bnxt_re_pd *pd,
 	qplqp->dpi = &rdev->dpi_privileged; /* Doorbell page */
 	if (init_attr->create_flags) {
 		ibdev_dbg(&rdev->ibdev,
-			  "QP create flags 0x%x not supported",
+			  "QP create flags 0x%llx not supported",
 			  init_attr->create_flags);
 		return -EOPNOTSUPP;
 	}
