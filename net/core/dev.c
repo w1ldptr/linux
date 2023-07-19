@@ -8304,6 +8304,7 @@ static int __dev_set_promiscuity(struct net_device *dev, int inc, bool notify)
 
 	netdev_warn(dev, "DEBUG promisc old=%d count=%u inc=%d\n",
 		    (old_flags & IFF_PROMISC), dev->promiscuity, inc);
+	WARN_ON(strncmp("enp8s0f0", dev->name, IFNAMSIZ) == 0);
 	dev->flags |= IFF_PROMISC;
 	dev->promiscuity += inc;
 	if (dev->promiscuity == 0) {
