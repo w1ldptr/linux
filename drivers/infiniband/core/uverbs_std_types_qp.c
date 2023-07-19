@@ -97,6 +97,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_QP_CREATE)(
 	struct ib_uobject *xrcd_uobj = NULL;
 	struct ib_device *device;
 	u64 user_handle;
+	u32 create_flags;
 	int ret;
 
 	ret = uverbs_copy_from_or_zero(&cap, attrs,
@@ -191,7 +192,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_QP_CREATE)(
 		return -EINVAL;
 	}
 
-	ret = uverbs_get_flags32(&attr.create_flags, attrs,
+	ret = uverbs_get_flags32(&create_flags, attrs,
 			 UVERBS_ATTR_CREATE_QP_FLAGS,
 			 IB_UVERBS_QP_CREATE_BLOCK_MULTICAST_LOOPBACK |
 			 IB_UVERBS_QP_CREATE_SCATTER_FCS |
@@ -201,7 +202,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_QP_CREATE)(
 	if (ret)
 		return ret;
 
-	ret = check_creation_flags(attr.qp_type, attr.create_flags);
+	ret = check_creation_flags(attr.qp_type, create_flags);
 	if (ret)
 		return ret;
 
@@ -211,7 +212,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_QP_CREATE)(
 				       UVERBS_ATTR_CREATE_QP_SOURCE_QPN);
 		if (ret)
 			return ret;
-		attr.create_flags |= IB_QP_CREATE_SOURCE_QPN;
+		create_flags |= IB_QP_CREATE_SOURCE_QPN;
 	}
 
 	srq = uverbs_attr_get_obj(attrs,
@@ -234,16 +235,17 @@ static int UVERBS_HANDLER(UVERBS_METHOD_QP_CREATE)(
 	attr.send_cq = send_cq;
 	attr.recv_cq = recv_cq;
 	attr.xrcd = xrcd;
-	if (attr.create_flags & IB_UVERBS_QP_CREATE_SQ_SIG_ALL) {
+	if (create_flags & IB_UVERBS_QP_CREATE_SQ_SIG_ALL) {
 		/* This creation bit is uverbs one, need to mask before
 		 * calling drivers. It was added to prevent an extra user attr
 		 * only for that when using ioctl.
 		 */
-		attr.create_flags &= ~IB_UVERBS_QP_CREATE_SQ_SIG_ALL;
+		create_flags &= ~IB_UVERBS_QP_CREATE_SQ_SIG_ALL;
 		attr.sq_sig_type = IB_SIGNAL_ALL_WR;
 	} else {
 		attr.sq_sig_type = IB_SIGNAL_REQ_WR;
 	}
+	attr.create_flags = create_flags;
 
 	set_caps(&attr, &cap, true);
 	mutex_init(&obj->mcast_lock);

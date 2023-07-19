@@ -1140,16 +1140,15 @@ enum ib_qp_type {
 	IB_QPT_RESERVED10,
 };
 
+/*
+ * bits 0, 5, 6 and 7 may be set by old kernels and should not be used.
+ */
 enum ib_qp_create_flags {
-	IB_QP_CREATE_IPOIB_UD_LSO		= 1 << 0,
 	IB_QP_CREATE_BLOCK_MULTICAST_LOOPBACK	=
 		IB_UVERBS_QP_CREATE_BLOCK_MULTICAST_LOOPBACK,
 	IB_QP_CREATE_CROSS_CHANNEL              = 1 << 2,
 	IB_QP_CREATE_MANAGED_SEND               = 1 << 3,
 	IB_QP_CREATE_MANAGED_RECV               = 1 << 4,
-	IB_QP_CREATE_NETIF_QP			= 1 << 5,
-	IB_QP_CREATE_INTEGRITY_EN		= 1 << 6,
-	IB_QP_CREATE_NETDEV_USE			= 1 << 7,
 	IB_QP_CREATE_SCATTER_FCS		=
 		IB_UVERBS_QP_CREATE_SCATTER_FCS,
 	IB_QP_CREATE_CVLAN_STRIPPING		=
@@ -1159,7 +1158,18 @@ enum ib_qp_create_flags {
 		IB_UVERBS_QP_CREATE_PCI_WRITE_END_PADDING,
 	/* reserve bits 26-31 for low level drivers' internal use */
 	IB_QP_CREATE_RESERVED_START		= 1 << 26,
-	IB_QP_CREATE_RESERVED_END		= 1 << 31,
+	IB_QP_CREATE_RESERVED_END		= 1ULL << 31,
+
+	/* The below flags are used only by the kernel */
+
+	 /* The created QP will be used for IPoIB UD LSO */
+	IB_QP_CREATE_IPOIB_UD_LSO		= 1ULL << 32,
+	/* Create a QP that supports flow-steering */
+	IB_QP_CREATE_NETIF_QP			= 1ULL << 33,
+	/* The created QP can carry out integrity handover operations */
+	IB_QP_CREATE_INTEGRITY_EN		= 1ULL << 34,
+	/* Create an accelerated UD QP */
+	IB_QP_CREATE_NETDEV_USE			= 1ULL << 35,
 };
 
 /*
@@ -1179,7 +1189,7 @@ struct ib_qp_init_attr {
 	struct ib_qp_cap	cap;
 	enum ib_sig_type	sq_sig_type;
 	enum ib_qp_type		qp_type;
-	u32			create_flags;
+	u64			create_flags;
 
 	/*
 	 * Only needed for special QP types, or when using the RW API.

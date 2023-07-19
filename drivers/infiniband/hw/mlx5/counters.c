@@ -40,6 +40,7 @@ static const struct mlx5_ib_counter retrans_q_cnts[] = {
 	INIT_Q_COUNTER(packet_seq_err),
 	INIT_Q_COUNTER(implied_nak_seq_err),
 	INIT_Q_COUNTER(local_ack_timeout_err),
+	INIT_Q_COUNTER(rx_dct_connect),
 };
 
 static const struct mlx5_ib_counter vport_basic_q_cnts[] = {

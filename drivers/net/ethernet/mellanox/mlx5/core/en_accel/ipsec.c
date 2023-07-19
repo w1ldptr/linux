@@ -38,8 +38,11 @@
 #include <net/netevent.h>
 
 #include "en.h"
+#include "eswitch.h"
+#include "lib/ipsec.h"
 #include "ipsec.h"
 #include "ipsec_rxtx.h"
+#include "en_rep.h"
 
 #define MLX5_IPSEC_RESCHED msecs_to_jiffies(1000)
 #define MLX5E_IPSEC_TUNNEL_SA XA_MARK_1
@@ -354,6 +357,12 @@ void mlx5e_ipsec_build_accel_xfrm_attrs(struct mlx5e_ipsec_sa_entry *sa_entry,
 
 	mlx5e_ipsec_init_limits(sa_entry, attrs);
 	mlx5e_ipsec_init_macs(sa_entry, attrs);
+
+	if (x->encap) {
+		attrs->encap = true;
+		attrs->sport = x->encap->encap_sport;
+		attrs->dport = x->encap->encap_dport;
+	}
 }
 
 static int mlx5e_xfrm_validate_state(struct mlx5_core_dev *mdev,
@@ -387,8 +396,25 @@ static int mlx5e_xfrm_validate_state(struct mlx5_core_dev *mdev,
 		return -EINVAL;
 	}
 	if (x->encap) {
-		NL_SET_ERR_MSG_MOD(extack, "Encapsulated xfrm state may not be offloaded");
-		return -EINVAL;
+		if (!(mlx5_ipsec_device_caps(mdev) & MLX5_IPSEC_CAP_ESPINUDP)) {
+			NL_SET_ERR_MSG_MOD(extack, "Encapsulation is not supported");
+			return -EINVAL;
+		}
+
+		if (x->encap->encap_type != UDP_ENCAP_ESPINUDP) {
+			NL_SET_ERR_MSG_MOD(extack, "Encapsulation other than UDP is not supported");
+			return -EINVAL;
+		}
+
+		if (x->xso.type != XFRM_DEV_OFFLOAD_PACKET) {
+			NL_SET_ERR_MSG_MOD(extack, "Encapsulation is supported in packet offload mode only");
+			return -EINVAL;
+		}
+
+		if (x->props.mode != XFRM_MODE_TRANSPORT) {
+			NL_SET_ERR_MSG_MOD(extack, "Encapsulation is supported in transport mode only");
+			return -EINVAL;
+		}
 	}
 	if (!x->aead) {
 		NL_SET_ERR_MSG_MOD(extack, "Cannot offload xfrm states without aead");
@@ -646,6 +672,11 @@ static int mlx5e_xfrm_add_state(struct xfrm_state *x,
 	if (err)
 		goto err_xfrm;
 
+	if (ipsec->is_uplink_rep && mlx5_eswitch_block_ipsec(priv->mdev)) {
+		err = -EBUSY;
+		goto err_xfrm;
+	}
+
 	/* check esn */
 	if (x->props.flags & XFRM_STATE_ESN)
 		mlx5e_ipsec_update_esn_state(sa_entry);
@@ -654,7 +685,7 @@ static int mlx5e_xfrm_add_state(struct xfrm_state *x,
 
 	err = mlx5_ipsec_create_work(sa_entry);
 	if (err)
-		goto err_xfrm;
+		goto unblock_ipsec;
 
 	err = mlx5e_ipsec_create_dwork(sa_entry);
 	if (err)
@@ -711,6 +742,9 @@ release_work:
 	if (sa_entry->work)
 		kfree(sa_entry->work->data);
 	kfree(sa_entry->work);
+unblock_ipsec:
+	if (ipsec->is_uplink_rep)
+		mlx5_eswitch_unblock_ipsec(priv->mdev);
 err_xfrm:
 	kfree(sa_entry);
 	NL_SET_ERR_MSG_WEAK_MOD(extack, "Device failed to offload this state");
@@ -735,6 +769,8 @@ static void mlx5e_xfrm_del_state(struct xfrm_state *x)
 		/* Make sure that no ARP requests are running in parallel */
 		flush_workqueue(ipsec->wq);
 
+	if (ipsec->is_uplink_rep)
+		mlx5_eswitch_unblock_ipsec(ipsec->mdev);
 }
 
 static void mlx5e_xfrm_free_state(struct xfrm_state *x)
@@ -835,6 +871,7 @@ void mlx5e_ipsec_init(struct mlx5e_priv *priv)
 			goto clear_aso;
 	}
 
+	ipsec->is_uplink_rep = mlx5e_is_uplink_rep(priv);
 	ret = mlx5e_accel_ipsec_fs_init(ipsec);
 	if (ret)
 		goto err_fs_init;
@@ -924,6 +961,18 @@ static void mlx5e_xfrm_update_curlft(struct xfrm_state *x)
 	x->curlft.bytes += bytes;
 }
 
+static void mlx5e_ipsec_del_policy(struct work_struct *_work)
+{
+	struct mlx5e_ipsec_work *work =
+		container_of(_work, struct mlx5e_ipsec_work, work);
+	struct mlx5e_ipsec_pol_entry *pol_entry = work->data;
+
+	mlx5e_accel_ipsec_fs_del_pol(pol_entry);
+	if (pol_entry->ipsec->is_uplink_rep)
+		mlx5_eswitch_unblock_ipsec(pol_entry->ipsec->mdev);
+	kfree(pol_entry);
+}
+
 static int mlx5e_xfrm_validate_policy(struct mlx5_core_dev *mdev,
 				      struct xfrm_policy *x,
 				      struct netlink_ext_ack *extack)
@@ -1009,6 +1058,7 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 {
 	struct net_device *netdev = x->xdo.real_dev;
 	struct mlx5e_ipsec_pol_entry *pol_entry;
+	struct mlx5e_ipsec_work *work;
 	struct mlx5e_priv *priv;
 	int err;
 
@@ -1028,6 +1078,14 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 
 	pol_entry->x = x;
 	pol_entry->ipsec = priv->ipsec;
+	work = &pol_entry->work;
+	INIT_WORK(&work->work, mlx5e_ipsec_del_policy);
+	pol_entry->work.data = pol_entry;
+
+	if (priv->ipsec->is_uplink_rep && mlx5_eswitch_block_ipsec(priv->mdev)) {
+		err = -EBUSY;
+		goto ipsec_busy;
+	}
 
 	mlx5e_ipsec_build_accel_pol_attrs(pol_entry, &pol_entry->attrs);
 	err = mlx5e_accel_ipsec_fs_add_pol(pol_entry);
@@ -1038,6 +1096,9 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 	return 0;
 
 err_fs:
+	if (priv->ipsec->is_uplink_rep)
+		mlx5_eswitch_unblock_ipsec(priv->mdev);
+ipsec_busy:
 	kfree(pol_entry);
 	NL_SET_ERR_MSG_MOD(extack, "Device failed to offload this policy");
 	return err;
@@ -1046,15 +1107,10 @@ err_fs:
 static void mlx5e_xfrm_del_policy(struct xfrm_policy *x)
 {
 	struct mlx5e_ipsec_pol_entry *pol_entry = to_ipsec_pol_entry(x);
+	struct mlx5e_ipsec_work *work = &pol_entry->work;
+	struct mlx5e_ipsec *ipsec = pol_entry->ipsec;
 
-	mlx5e_accel_ipsec_fs_del_pol(pol_entry);
-}
-
-static void mlx5e_xfrm_free_policy(struct xfrm_policy *x)
-{
-	struct mlx5e_ipsec_pol_entry *pol_entry = to_ipsec_pol_entry(x);
-
-	kfree(pol_entry);
+	queue_work(ipsec->wq, &work->work);
 }
 
 static const struct xfrmdev_ops mlx5e_ipsec_xfrmdev_ops = {
@@ -1075,7 +1131,6 @@ static const struct xfrmdev_ops mlx5e_ipsec_packet_xfrmdev_ops = {
 	.xdo_dev_state_update_curlft = mlx5e_xfrm_update_curlft,
 	.xdo_dev_policy_add = mlx5e_xfrm_add_policy,
 	.xdo_dev_policy_delete = mlx5e_xfrm_del_policy,
-	.xdo_dev_policy_free = mlx5e_xfrm_free_policy,
 };
 
 void mlx5e_ipsec_build_netdev(struct mlx5e_priv *priv)
