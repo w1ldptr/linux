@@ -43,11 +43,13 @@
 #include "mlx5_core.h"
 #include "lib/eq.h"
 #include "lag/lag.h"
+#include "lib/ipsec.h"
 #include "eswitch.h"
 #include "fs_core.h"
 #include "devlink.h"
 #include "ecpf.h"
 #include "en/mod_hdr.h"
+#include "en_accel/ipsec.h"
 
 enum {
 	MLX5_ACTION_NONE = 0,
@@ -880,6 +882,61 @@ static void esw_vport_cleanup(struct mlx5_eswitch *esw, struct mlx5_vport *vport
 
 	mlx5_esw_qos_vport_disable(esw, vport);
 	esw_vport_cleanup_acl(esw, vport);
+}
+
+void mlx5_esw_vport_ipsec_offload_enable(struct mlx5_eswitch *esw)
+{
+	esw->enabled_ipsec_vf_count++;
+}
+
+void mlx5_esw_vport_ipsec_offload_disable(struct mlx5_eswitch *esw)
+{
+	esw->enabled_ipsec_vf_count--;
+}
+
+/* The caller must hold devlink->lock */
+bool mlx5_esw_vport_ipsec_offload_enabled_locked(struct mlx5_eswitch *esw)
+{
+	return esw->enabled_ipsec_vf_count;
+}
+
+bool mlx5_eswitch_block_ipsec(struct mlx5_core_dev *dev)
+{
+	struct devlink *devlink = priv_to_devlink(dev);
+	struct mlx5_eswitch *esw;
+	bool vf_ipsec_enabled;
+
+	devl_lock(devlink);
+	esw = mlx5_devlink_eswitch_get(devlink);
+	if (IS_ERR(esw)) {
+		devl_unlock(devlink);
+		/* Failure means no eswitch => core dev is not a PF */
+		return false;
+	}
+
+	mutex_lock(&esw->state_lock);
+	vf_ipsec_enabled = mlx5_esw_vport_ipsec_offload_enabled_locked(esw);
+	if (!vf_ipsec_enabled)
+		mlx5_eswitch_block_ipsec_mode(dev);
+	mutex_unlock(&esw->state_lock);
+	devl_unlock(devlink);
+
+	return vf_ipsec_enabled;
+}
+
+void mlx5_eswitch_unblock_ipsec(struct mlx5_core_dev *dev)
+{
+	struct devlink *devlink = priv_to_devlink(dev);
+	struct mlx5_eswitch *esw;
+
+	esw = mlx5_devlink_eswitch_get(devlink);
+	if (IS_ERR(esw))
+		/* Failure means no eswitch => core dev is not a PF */
+		return;
+
+	mutex_lock(&esw->state_lock);
+	mlx5_eswitch_unblock_ipsec_mode(dev);
+	mutex_unlock(&esw->state_lock);
 }
 
 int mlx5_esw_vport_enable(struct mlx5_eswitch *esw, u16 vport_num,
