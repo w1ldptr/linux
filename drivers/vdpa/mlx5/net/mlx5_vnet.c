@@ -3564,7 +3564,8 @@ static void mlx5v_shutdown(struct auxiliary_device *auxdev)
 	mgtdev = auxiliary_get_drvdata(auxdev);
 	ndev = mgtdev->ndev;
 
-	free_irqs(ndev);
+	if (ndev)
+		free_irqs(ndev);
 }
 
 static const struct auxiliary_device_id mlx5v_id_table[] = {
