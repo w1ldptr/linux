@@ -808,6 +808,7 @@ struct mlx5_core_dev {
 	struct mlx5_thermal	*thermal;
 	u64			num_block_tc;
 	u64			num_block_ipsec;
+	u64 			num_ipsec_offloads;
 };
 
 struct mlx5_db {
