@@ -65,9 +65,11 @@ enum {
 
 enum {
 	MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE        = 0x0,
+	MLX5_SET_HCA_CAP_OP_MOD_ETHERNET_OFFLOADS     = 0x1,
 	MLX5_SET_HCA_CAP_OP_MOD_ODP                   = 0x2,
 	MLX5_SET_HCA_CAP_OP_MOD_ATOMIC                = 0x3,
 	MLX5_SET_HCA_CAP_OP_MOD_ROCE                  = 0x4,
+	MLX5_SET_HCA_CAP_OP_MOD_IPSEC                 = 0x15,
 	MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE2       = 0x20,
 	MLX5_SET_HCA_CAP_OP_MOD_PORT_SELECTION        = 0x25,
 };
@@ -464,10 +466,10 @@ struct mlx5_ifc_flow_table_prop_layout_bits {
 
 	u8         reformat_add_esp_trasport[0x1];
 	u8         reformat_l2_to_l3_esp_tunnel[0x1];
-	u8         reserved_at_42[0x1];
+	u8         reformat_add_esp_transport_over_udp[0x1];
 	u8         reformat_del_esp_trasport[0x1];
 	u8         reformat_l3_esp_tunnel_to_l2[0x1];
-	u8         reserved_at_45[0x1];
+	u8         reformat_del_esp_transport_over_udp[0x1];
 	u8         execute_aso[0x1];
 	u8         reserved_at_47[0x19];
 
@@ -3494,6 +3496,7 @@ union mlx5_ifc_hca_cap_union_bits {
 	struct mlx5_ifc_shampo_cap_bits shampo_cap;
 	struct mlx5_ifc_macsec_cap_bits macsec_cap;
 	struct mlx5_ifc_crypto_cap_bits crypto_cap;
+	struct mlx5_ifc_ipsec_cap_bits ipsec_cap;
 	u8         reserved_at_0[0x8000];
 };
 
@@ -6665,9 +6668,12 @@ enum mlx5_reformat_ctx_type {
 	MLX5_REFORMAT_TYPE_L2_TO_L3_TUNNEL = 0x4,
 	MLX5_REFORMAT_TYPE_ADD_ESP_TRANSPORT_OVER_IPV4 = 0x5,
 	MLX5_REFORMAT_TYPE_L2_TO_L3_ESP_TUNNEL = 0x6,
+	MLX5_REFORMAT_TYPE_ADD_ESP_TRANSPORT_OVER_UDPV4 = 0x7,
 	MLX5_REFORMAT_TYPE_DEL_ESP_TRANSPORT = 0x8,
 	MLX5_REFORMAT_TYPE_L3_ESP_TUNNEL_TO_L2 = 0x9,
+	MLX5_REFORMAT_TYPE_DEL_ESP_TRANSPORT_OVER_UDP = 0xa,
 	MLX5_REFORMAT_TYPE_ADD_ESP_TRANSPORT_OVER_IPV6 = 0xb,
+	MLX5_REFORMAT_TYPE_ADD_ESP_TRANSPORT_OVER_UDPV6 = 0xc,
 	MLX5_REFORMAT_TYPE_INSERT_HDR = 0xf,
 	MLX5_REFORMAT_TYPE_REMOVE_HDR = 0x10,
 	MLX5_REFORMAT_TYPE_ADD_MACSEC = 0x11,

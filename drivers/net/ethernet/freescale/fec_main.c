@@ -325,8 +325,6 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define FEC_WOL_FLAG_ENABLE		(0x1 << 1)
 #define FEC_WOL_FLAG_SLEEP_ON		(0x1 << 2)
 
-#define COPYBREAK_DEFAULT	256
-
 /* Max number of allowed TCP segments for software TSO */
 #define FEC_MAX_TSO_SEGS	100
 #define FEC_MAX_SKB_DESCS	(FEC_MAX_TSO_SEGS * 2 + MAX_SKB_FRAGS)
@@ -1372,7 +1370,7 @@ fec_enet_hwtstamp(struct fec_enet_private *fep, unsigned ts,
 }
 
 static void
-fec_enet_tx_queue(struct net_device *ndev, u16 queue_id)
+fec_enet_tx_queue(struct net_device *ndev, u16 queue_id, int budget)
 {
 	struct	fec_enet_private *fep;
 	struct xdp_frame *xdpf;
@@ -1416,6 +1414,14 @@ fec_enet_tx_queue(struct net_device *ndev, u16 queue_id)
 			if (!skb)
 				goto tx_buf_done;
 		} else {
+			/* Tx processing cannot call any XDP (or page pool) APIs if
+			 * the "budget" is 0. Because NAPI is called with budget of
+			 * 0 (such as netpoll) indicates we may be in an IRQ context,
+			 * however, we can't use the page pool from IRQ context.
+			 */
+			if (unlikely(!budget))
+				break;
+
 			xdpf = txq->tx_buf[index].xdp;
 			if (bdp->cbd_bufaddr)
 				dma_unmap_single(&fep->pdev->dev,
@@ -1508,14 +1514,14 @@ tx_buf_done:
 		writel(0, txq->bd.reg_desc_active);
 }
 
-static void fec_enet_tx(struct net_device *ndev)
+static void fec_enet_tx(struct net_device *ndev, int budget)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	int i;
 
 	/* Make sure that AVB queues are processed first. */
 	for (i = fep->num_tx_queues - 1; i >= 0; i--)
-		fec_enet_tx_queue(ndev, i);
+		fec_enet_tx_queue(ndev, i, budget);
 }
 
 static void fec_enet_update_cbd(struct fec_enet_priv_rx_q *rxq,
@@ -1858,7 +1864,7 @@ static int fec_enet_rx_napi(struct napi_struct *napi, int budget)
 
 	do {
 		done += fec_enet_rx(ndev, budget - done);
-		fec_enet_tx(ndev);
+		fec_enet_tx(ndev, budget);
 	} while ((done < budget) && fec_enet_collect_events(fep));
 
 	if (done < budget) {
@@ -3051,44 +3057,6 @@ static int fec_enet_set_coalesce(struct net_device *ndev,
 	return 0;
 }
 
-static int fec_enet_get_tunable(struct net_device *netdev,
-				const struct ethtool_tunable *tuna,
-				void *data)
-{
-	struct fec_enet_private *fep = netdev_priv(netdev);
-	int ret = 0;
-
-	switch (tuna->id) {
-	case ETHTOOL_RX_COPYBREAK:
-		*(u32 *)data = fep->rx_copybreak;
-		break;
-	default:
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
-}
-
-static int fec_enet_set_tunable(struct net_device *netdev,
-				const struct ethtool_tunable *tuna,
-				const void *data)
-{
-	struct fec_enet_private *fep = netdev_priv(netdev);
-	int ret = 0;
-
-	switch (tuna->id) {
-	case ETHTOOL_RX_COPYBREAK:
-		fep->rx_copybreak = *(u32 *)data;
-		break;
-	default:
-		ret = -EINVAL;
-		break;
-	}
-
-	return ret;
-}
-
 /* LPI Sleep Ts count base on tx clk (clk_ref).
  * The lpi sleep cnt value = X us / (cycle_ns).
  */
@@ -3226,8 +3194,6 @@ static const struct ethtool_ops fec_enet_ethtool_ops = {
 	.get_sset_count		= fec_enet_get_sset_count,
 #endif
 	.get_ts_info		= fec_enet_get_ts_info,
-	.get_tunable		= fec_enet_get_tunable,
-	.set_tunable		= fec_enet_set_tunable,
 	.get_wol		= fec_enet_get_wol,
 	.set_wol		= fec_enet_set_wol,
 	.get_eee		= fec_enet_get_eee,
@@ -3916,6 +3882,8 @@ static int fec_enet_xdp_xmit(struct net_device *dev,
 
 	__netif_tx_lock(nq, cpu);
 
+	/* Avoid tx timeout as XDP shares the queue with kernel stack */
+	txq_trans_cond_update(nq);
 	for (i = 0; i < num_frames; i++) {
 		if (fec_enet_txq_xmit_frame(fep, txq, frames[i]) < 0)
 			break;
@@ -4007,9 +3975,6 @@ static int fec_enet_init(struct net_device *ndev)
 	ret = fec_get_mac(ndev);
 	if (ret)
 		goto free_queue_mem;
-
-	/* make sure MAC we just acquired is programmed into the hw */
-	fec_set_mac_address(ndev, NULL);
 
 	/* Set receive and transmit descriptor base. */
 	for (i = 0; i < fep->num_rx_queues; i++) {
@@ -4476,7 +4441,6 @@ fec_probe(struct platform_device *pdev)
 	if (fep->bufdesc_ex && fep->ptp_clock)
 		netdev_info(ndev, "registered PHC device %d\n", fep->dev_id);
 
-	fep->rx_copybreak = COPYBREAK_DEFAULT;
 	INIT_WORK(&fep->tx_timeout_work, fec_enet_timeout_work);
 
 	pm_runtime_mark_last_busy(&pdev->dev);
@@ -4516,7 +4480,7 @@ failed_ioremap:
 	return ret;
 }
 
-static int
+static void
 fec_drv_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
@@ -4552,7 +4516,6 @@ fec_drv_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 
 	free_netdev(ndev);
-	return 0;
 }
 
 static int __maybe_unused fec_suspend(struct device *dev)
@@ -4708,7 +4671,7 @@ static struct platform_driver fec_driver = {
 	},
 	.id_table = fec_devtype,
 	.probe	= fec_probe,
-	.remove	= fec_drv_remove,
+	.remove_new = fec_drv_remove,
 };
 
 module_platform_driver(fec_driver);
