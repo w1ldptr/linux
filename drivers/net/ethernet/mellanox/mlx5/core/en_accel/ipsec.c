@@ -906,7 +906,14 @@ void mlx5e_ipsec_cleanup(struct mlx5e_priv *priv)
 		unregister_netevent_notifier(&ipsec->netevent_nb);
 	if (mlx5_ipsec_device_caps(priv->mdev) & MLX5_IPSEC_CAP_PACKET_OFFLOAD)
 		mlx5e_ipsec_aso_cleanup(ipsec);
+
+	/* At this point all SA/policies works already executed and
+	 * there are no pending tasks, so destroy workqueue can safely
+	 * be called without lockdep to avoid false positive.
+	 */
+	lockdep_off();
 	destroy_workqueue(ipsec->wq);
+	lockdep_on();
 	kfree(ipsec);
 	priv->ipsec = NULL;
 }
