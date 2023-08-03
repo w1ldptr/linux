@@ -4732,13 +4732,7 @@ static bool pwq_busy(struct pool_workqueue *pwq)
 	return false;
 }
 
-/**
- * destroy_workqueue - safely terminate a workqueue
- * @wq: target workqueue
- *
- * Safely destroy a workqueue. All work currently pending will be done first.
- */
-void destroy_workqueue(struct workqueue_struct *wq)
+static void destroy_with_drain_workqueue(struct workqueue_struct *wq, bool drain)
 {
 	struct pool_workqueue *pwq;
 	int node;
@@ -4755,7 +4749,8 @@ void destroy_workqueue(struct workqueue_struct *wq)
 	mutex_unlock(&wq->mutex);
 
 	/* drain it before proceeding with destruction */
-	drain_workqueue(wq);
+	if (drain)
+		drain_workqueue(wq);
 
 	/* kill rescuer, if sanity checks fail, leave it w/o rescuer */
 	if (wq->rescuer) {
@@ -4828,7 +4823,30 @@ void destroy_workqueue(struct workqueue_struct *wq)
 		put_pwq_unlocked(pwq);
 	}
 }
+
+/**
+ * destroy_workqueue - safely terminate a workqueue
+ * @wq: target workqueue
+ *
+ * Safely destroy a workqueue. All work currently pending will be done first.
+ */
+void destroy_workqueue(struct workqueue_struct *wq)
+{
+	destroy_with_drain_workqueue(wq, true);
+}
 EXPORT_SYMBOL_GPL(destroy_workqueue);
+
+/**
+ * free_workqueue - safely terminate an empty workqueue
+ * @wq: target workqueue
+ *
+ * Safely destroy an empty workqueue.
+ */
+void free_workqueue(struct workqueue_struct *wq)
+{
+	destroy_with_drain_workqueue(wq, false);
+}
+EXPORT_SYMBOL_GPL(free_workqueue);
 
 /**
  * workqueue_set_max_active - adjust max_active of a workqueue
