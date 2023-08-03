@@ -212,37 +212,10 @@ void flow_offload_free(struct flow_offload *flow)
 }
 EXPORT_SYMBOL_GPL(flow_offload_free);
 
-static u32 flow_offload_hash(const void *data, u32 len, u32 seed)
-{
-	const struct flow_offload_tuple *tuple = data;
-
-	return jhash(tuple, offsetof(struct flow_offload_tuple, __hash), seed);
-}
-
-static u32 flow_offload_hash_obj(const void *data, u32 len, u32 seed)
-{
-	const struct flow_offload_tuple_rhash *tuplehash = data;
-
-	return jhash(&tuplehash->tuple, offsetof(struct flow_offload_tuple, __hash), seed);
-}
-
-static int flow_offload_hash_cmp(struct rhashtable_compare_arg *arg,
-					const void *ptr)
-{
-	const struct flow_offload_tuple *tuple = arg->key;
-	const struct flow_offload_tuple_rhash *x = ptr;
-
-	if (memcmp(&x->tuple, tuple, offsetof(struct flow_offload_tuple, __hash)))
-		return 1;
-
-	return 0;
-}
-
 static const struct rhashtable_params nf_flow_offload_rhash_params = {
+	.key_len		= offsetof(struct flow_offload_tuple, __hash),
+	.key_offset             = offsetof(struct flow_offload_tuple_rhash, tuple),
 	.head_offset		= offsetof(struct flow_offload_tuple_rhash, node),
-	.hashfn			= flow_offload_hash,
-	.obj_hashfn		= flow_offload_hash_obj,
-	.obj_cmpfn		= flow_offload_hash_cmp,
 	.automatic_shrinking	= true,
 };
 
@@ -271,15 +244,15 @@ int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow)
 
 	flow->timeout = nf_flowtable_time_stamp + flow_offload_get_timeout(flow);
 
-	err = rhashtable_insert_fast(&flow_table->rhashtable,
-				     &flow->tuplehash[0].node,
-				     nf_flow_offload_rhash_params);
+	err = rhashtable_lookup_insert_fast(&flow_table->rhashtable,
+					    &flow->tuplehash[0].node,
+					    nf_flow_offload_rhash_params);
 	if (err < 0)
 		return err;
 
-	err = rhashtable_insert_fast(&flow_table->rhashtable,
-				     &flow->tuplehash[1].node,
-				     nf_flow_offload_rhash_params);
+	err = rhashtable_lookup_insert_fast(&flow_table->rhashtable,
+					    &flow->tuplehash[1].node,
+					    nf_flow_offload_rhash_params);
 	if (err < 0) {
 		rhashtable_remove_fast(&flow_table->rhashtable,
 				       &flow->tuplehash[0].node,
