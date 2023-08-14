@@ -60,7 +60,7 @@ static struct devlink_port *mlx5_esw_dl_port_alloc(struct mlx5_eswitch *esw, u16
 	}  else if (mlx5_core_is_ec_vf_vport(esw->dev, vport_num)) {
 		memcpy(dl_port->attrs.switch_id.id, ppid.id, ppid.id_len);
 		dl_port->attrs.switch_id.id_len = ppid.id_len;
-		devlink_port_attrs_pci_vf_set(dl_port, controller_num, pfnum,
+		devlink_port_attrs_pci_vf_set(dl_port, 0, pfnum,
 					      vport_num - 1, false);
 	}
 	return dl_port;
@@ -78,6 +78,12 @@ static const struct devlink_port_ops mlx5_esw_dl_port_ops = {
 	.port_fn_roce_set = mlx5_devlink_port_fn_roce_set,
 	.port_fn_migratable_get = mlx5_devlink_port_fn_migratable_get,
 	.port_fn_migratable_set = mlx5_devlink_port_fn_migratable_set,
+#ifdef CONFIG_XFRM_OFFLOAD
+	.port_fn_ipsec_crypto_get = mlx5_devlink_port_fn_ipsec_crypto_get,
+	.port_fn_ipsec_crypto_set = mlx5_devlink_port_fn_ipsec_crypto_set,
+	.port_fn_ipsec_packet_get = mlx5_devlink_port_fn_ipsec_packet_get,
+	.port_fn_ipsec_packet_set = mlx5_devlink_port_fn_ipsec_packet_set,
+#endif /* CONFIG_XFRM_OFFLOAD */
 };
 
 int mlx5_esw_offloads_devlink_port_register(struct mlx5_eswitch *esw, u16 vport_num)
@@ -132,10 +138,8 @@ void mlx5_esw_offloads_devlink_port_unregister(struct mlx5_eswitch *esw, u16 vpo
 	if (IS_ERR(vport))
 		return;
 
-	if (vport->dl_port->devlink_rate) {
-		mlx5_esw_qos_vport_update_group(esw, vport, NULL, NULL);
-		devl_rate_leaf_destroy(vport->dl_port);
-	}
+	mlx5_esw_qos_vport_update_group(esw, vport, NULL, NULL);
+	devl_rate_leaf_destroy(vport->dl_port);
 
 	devl_port_unregister(vport->dl_port);
 	mlx5_esw_dl_port_free(vport->dl_port);
@@ -211,10 +215,8 @@ void mlx5_esw_devlink_sf_port_unregister(struct mlx5_eswitch *esw, u16 vport_num
 	if (IS_ERR(vport))
 		return;
 
-	if (vport->dl_port->devlink_rate) {
-		mlx5_esw_qos_vport_update_group(esw, vport, NULL, NULL);
-		devl_rate_leaf_destroy(vport->dl_port);
-	}
+	mlx5_esw_qos_vport_update_group(esw, vport, NULL, NULL);
+	devl_rate_leaf_destroy(vport->dl_port);
 
 	devl_port_unregister(vport->dl_port);
 	vport->dl_port = NULL;

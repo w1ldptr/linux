@@ -2524,7 +2524,7 @@ static int cmac_dma_init(struct rtw89_dev *rtwdev, u8 mac_idx)
 	u32 reg;
 	int ret;
 
-	if (chip_id != RTL8852A && chip_id != RTL8852B)
+	if (chip_id != RTL8852B)
 		return 0;
 
 	ret = rtw89_mac_check_mac_en(rtwdev, mac_idx, RTW89_CMAC_SEL);
@@ -4437,8 +4437,7 @@ rtw89_mac_c2h_done_ack(struct rtw89_dev *rtwdev, struct sk_buff *skb_c2h, u32 le
 static void
 rtw89_mac_c2h_log(struct rtw89_dev *rtwdev, struct sk_buff *c2h, u32 len)
 {
-	rtw89_info(rtwdev, "%*s", RTW89_GET_C2H_LOG_LEN(len),
-		   RTW89_GET_C2H_LOG_SRT_PRT(c2h->data));
+	rtw89_fw_log_dump(rtwdev, c2h->data, len);
 }
 
 static void
