@@ -229,6 +229,83 @@ out:
 	return err;
 }
 
+static void handle_ipsec_rx_bringup(struct mlx5e_ipsec *ipsec, u32 family)
+{
+	struct mlx5e_ipsec_rx *rx = ipsec_rx(ipsec, family, XFRM_DEV_OFFLOAD_PACKET);
+	struct mlx5_flow_namespace *ns = mlx5e_fs_get_ns(ipsec->fs, false);
+	struct mlx5_flow_destination old_dest, new_dest;
+
+	old_dest = mlx5_ttc_get_default_dest(mlx5e_fs_get_ttc(ipsec->fs, false),
+					     family2tt(family));
+
+	mlx5_ipsec_fs_roce_rx_create(ipsec->mdev, ipsec->roce, ns, &old_dest, family,
+				     MLX5E_ACCEL_FS_ESP_FT_ROCE_LEVEL, MLX5E_NIC_PRIO);
+
+	new_dest.ft = mlx5_ipsec_fs_roce_ft_get(ipsec->roce, family);
+	new_dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+	mlx5_modify_rule_destination(rx->status.rule, &new_dest, &old_dest);
+	mlx5_modify_rule_destination(rx->sa.rule, &new_dest, &old_dest);
+}
+
+static void handle_ipsec_rx_cleanup(struct mlx5e_ipsec *ipsec, u32 family)
+{
+	struct mlx5e_ipsec_rx *rx = ipsec_rx(ipsec, family, XFRM_DEV_OFFLOAD_PACKET);
+	struct mlx5_flow_destination old_dest, new_dest;
+
+	old_dest.ft = mlx5_ipsec_fs_roce_ft_get(ipsec->roce, family);
+	old_dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+	new_dest = mlx5_ttc_get_default_dest(mlx5e_fs_get_ttc(ipsec->fs, false),
+					     family2tt(family));
+	mlx5_modify_rule_destination(rx->sa.rule, &new_dest, &old_dest);
+	mlx5_modify_rule_destination(rx->status.rule, &new_dest, &old_dest);
+
+	mlx5_ipsec_fs_roce_rx_destroy(ipsec->roce, family, ipsec->mdev);
+}
+
+static void ipsec_mpv_work_handler(struct work_struct *_work)
+{
+	struct mlx5e_ipsec_mpv_work *work = container_of(_work, struct mlx5e_ipsec_mpv_work, work);
+	struct mlx5e_ipsec *ipsec = work->slave_priv->ipsec;
+
+	switch (work->event) {
+	case MPV_DEVCOM_IPSEC_MASTER_UP:
+		mutex_lock(&ipsec->tx->ft.mutex);
+		if (ipsec->tx->ft.refcnt)
+			mlx5_ipsec_fs_roce_tx_create(ipsec->mdev, ipsec->roce, ipsec->tx->ft.pol,
+						     true);
+		mutex_unlock(&ipsec->tx->ft.mutex);
+
+		mutex_lock(&ipsec->rx_ipv4->ft.mutex);
+		if (ipsec->rx_ipv4->ft.refcnt)
+			handle_ipsec_rx_bringup(ipsec, AF_INET);
+		mutex_unlock(&ipsec->rx_ipv4->ft.mutex);
+
+		mutex_lock(&ipsec->rx_ipv6->ft.mutex);
+		if (ipsec->rx_ipv6->ft.refcnt)
+			handle_ipsec_rx_bringup(ipsec, AF_INET6);
+		mutex_unlock(&ipsec->rx_ipv6->ft.mutex);
+		break;
+	case MPV_DEVCOM_IPSEC_MASTER_DOWN:
+		mutex_lock(&ipsec->tx->ft.mutex);
+		if (ipsec->tx->ft.refcnt)
+			mlx5_ipsec_fs_roce_tx_destroy(ipsec->roce, ipsec->mdev);
+		mutex_unlock(&ipsec->tx->ft.mutex);
+
+		mutex_lock(&ipsec->rx_ipv4->ft.mutex);
+		if (ipsec->rx_ipv4->ft.refcnt)
+			handle_ipsec_rx_cleanup(ipsec, AF_INET);
+		mutex_unlock(&ipsec->rx_ipv4->ft.mutex);
+
+		mutex_lock(&ipsec->rx_ipv6->ft.mutex);
+		if (ipsec->rx_ipv6->ft.refcnt)
+			handle_ipsec_rx_cleanup(ipsec, AF_INET6);
+		mutex_unlock(&ipsec->rx_ipv6->ft.mutex);
+		break;
+	}
+
+	complete(&work->master_priv->ipsec->comp);
+}
+
 static void ipsec_rx_ft_disconnect(struct mlx5e_ipsec *ipsec, u32 family)
 {
 	struct mlx5_ttc_table *ttc = mlx5e_fs_get_ttc(ipsec->fs, false);
@@ -262,7 +339,7 @@ static void rx_destroy(struct mlx5_core_dev *mdev, struct mlx5e_ipsec *ipsec,
 	}
 	mlx5_destroy_flow_table(rx->ft.status);
 
-	mlx5_ipsec_fs_roce_rx_destroy(ipsec->roce, family);
+	mlx5_ipsec_fs_roce_rx_destroy(ipsec->roce, family, mdev);
 }
 
 static void ipsec_rx_create_attr_set(struct mlx5e_ipsec *ipsec,
@@ -416,7 +493,7 @@ err_fs_ft:
 err_add:
 	mlx5_destroy_flow_table(rx->ft.status);
 err_fs_ft_status:
-	mlx5_ipsec_fs_roce_rx_destroy(ipsec->roce, family);
+	mlx5_ipsec_fs_roce_rx_destroy(ipsec->roce, family, mdev);
 	return err;
 }
 
@@ -567,7 +644,7 @@ err_rule:
 static void tx_destroy(struct mlx5e_ipsec *ipsec, struct mlx5e_ipsec_tx *tx,
 		       struct mlx5_ipsec_fs *roce)
 {
-	mlx5_ipsec_fs_roce_tx_destroy(roce);
+	mlx5_ipsec_fs_roce_tx_destroy(roce, ipsec->mdev);
 	if (tx->chains) {
 		ipsec_chains_destroy(tx->chains);
 	} else {
@@ -666,7 +743,7 @@ static int tx_create(struct mlx5e_ipsec *ipsec, struct mlx5e_ipsec_tx *tx,
 	}
 
 connect_roce:
-	err = mlx5_ipsec_fs_roce_tx_create(mdev, roce, tx->ft.pol);
+	err = mlx5_ipsec_fs_roce_tx_create(mdev, roce, tx->ft.pol, false);
 	if (err)
 		goto err_roce;
 	return 0;
@@ -936,23 +1013,42 @@ static void setup_fte_reg_c4(struct mlx5_flow_spec *spec, u32 reqid)
 
 static void setup_fte_upper_proto_match(struct mlx5_flow_spec *spec, struct upspec *upspec)
 {
-	if (upspec->proto != IPPROTO_UDP)
+	switch (upspec->proto) {
+	case IPPROTO_UDP:
+		if (upspec->dport) {
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria,
+				 udp_dport, upspec->dport_mask);
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_value,
+				 udp_dport, upspec->dport);
+		}
+		if (upspec->sport) {
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria,
+				 udp_sport, upspec->sport_mask);
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_value,
+				 udp_sport, upspec->sport);
+		}
+		break;
+	case IPPROTO_TCP:
+		if (upspec->dport) {
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria,
+				 tcp_dport, upspec->dport_mask);
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_value,
+				 tcp_dport, upspec->dport);
+		}
+		if (upspec->sport) {
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria,
+				 tcp_sport, upspec->sport_mask);
+			MLX5_SET(fte_match_set_lyr_2_4, spec->match_value,
+				 tcp_sport, upspec->sport);
+		}
+		break;
+	default:
 		return;
+	}
 
 	spec->match_criteria_enable |= MLX5_MATCH_OUTER_HEADERS;
 	MLX5_SET_TO_ONES(fte_match_set_lyr_2_4, spec->match_criteria, ip_protocol);
 	MLX5_SET(fte_match_set_lyr_2_4, spec->match_value, ip_protocol, upspec->proto);
-	if (upspec->dport) {
-		MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria, udp_dport,
-			 upspec->dport_mask);
-		MLX5_SET(fte_match_set_lyr_2_4, spec->match_value, udp_dport, upspec->dport);
-	}
-
-	if (upspec->sport) {
-		MLX5_SET(fte_match_set_lyr_2_4, spec->match_criteria, udp_sport,
-			 upspec->sport_mask);
-		MLX5_SET(fte_match_set_lyr_2_4, spec->match_value, udp_sport, upspec->sport);
-	}
 }
 
 static enum mlx5_flow_namespace_type ipsec_fs_get_ns(struct mlx5e_ipsec *ipsec,
@@ -1243,6 +1339,7 @@ static int rx_add_rule(struct mlx5e_ipsec_sa_entry *sa_entry)
 	setup_fte_spi(spec, attrs->spi);
 	setup_fte_esp(spec);
 	setup_fte_no_frags(spec);
+	setup_fte_upper_proto_match(spec, &attrs->upspec);
 
 	if (rx != ipsec->rx_esw)
 		err = setup_modify_header(ipsec, attrs->type,
@@ -1519,6 +1616,7 @@ static int rx_add_policy(struct mlx5e_ipsec_pol_entry *pol_entry)
 		setup_fte_addr6(spec, attrs->saddr.a6, attrs->daddr.a6);
 
 	setup_fte_no_frags(spec);
+	setup_fte_upper_proto_match(spec, &attrs->upspec);
 
 	switch (attrs->action) {
 	case XFRM_POLICY_ALLOW:
@@ -1882,7 +1980,8 @@ void mlx5e_accel_ipsec_fs_cleanup(struct mlx5e_ipsec *ipsec)
 	}
 }
 
-int mlx5e_accel_ipsec_fs_init(struct mlx5e_ipsec *ipsec)
+int mlx5e_accel_ipsec_fs_init(struct mlx5e_ipsec *ipsec,
+			      struct mlx5_devcom_comp_dev **devcom)
 {
 	struct mlx5_core_dev *mdev = ipsec->mdev;
 	struct mlx5_flow_namespace *ns, *ns_esw;
@@ -1934,7 +2033,7 @@ int mlx5e_accel_ipsec_fs_init(struct mlx5e_ipsec *ipsec)
 		ipsec->tx_esw->ns = ns_esw;
 		xa_init_flags(&ipsec->rx_esw->ipsec_obj_id_map, XA_FLAGS_ALLOC1);
 	} else if (mlx5_ipsec_device_caps(mdev) & MLX5_IPSEC_CAP_ROCE) {
-		ipsec->roce = mlx5_ipsec_fs_roce_init(mdev);
+		ipsec->roce = mlx5_ipsec_fs_roce_init(mdev, devcom);
 	}
 
 	return 0;
@@ -1980,4 +2079,34 @@ bool mlx5e_ipsec_fs_tunnel_enabled(struct mlx5e_ipsec_sa_entry *sa_entry)
 		return tx->allow_tunnel_mode;
 
 	return rx->allow_tunnel_mode;
+}
+
+void mlx5e_ipsec_handle_mpv_event(int event, struct mlx5e_priv *slave_priv,
+				  struct mlx5e_priv *master_priv)
+{
+	struct mlx5e_ipsec_mpv_work *work;
+
+	reinit_completion(&master_priv->ipsec->comp);
+
+	if (!slave_priv->ipsec) {
+		complete(&master_priv->ipsec->comp);
+		return;
+	}
+
+	work = &slave_priv->ipsec->mpv_work;
+
+	INIT_WORK(&work->work, ipsec_mpv_work_handler);
+	work->event = event;
+	work->slave_priv = slave_priv;
+	work->master_priv = master_priv;
+	queue_work(slave_priv->ipsec->wq, &work->work);
+}
+
+void mlx5e_ipsec_send_event(struct mlx5e_priv *priv, int event)
+{
+	if (!priv->ipsec)
+		return; /* IPsec not supported */
+
+	mlx5_devcom_send_event(priv->devcom, event, event, priv);
+	wait_for_completion(&priv->ipsec->comp);
 }

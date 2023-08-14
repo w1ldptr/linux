@@ -24,6 +24,7 @@
 #include <linux/mlx5/vport.h>
 #include <linux/mlx5/fs.h>
 #include <linux/mlx5/eswitch.h>
+#include <linux/mlx5/driver.h>
 #include <linux/list.h>
 #include <rdma/ib_smi.h>
 #include <rdma/ib_umem_odp.h>
@@ -46,6 +47,7 @@
 #include <rdma/uverbs_ioctl.h>
 #include <rdma/mlx5_user_ioctl_verbs.h>
 #include <rdma/mlx5_user_ioctl_cmds.h>
+#include "macsec.h"
 
 #define UVERBS_MODULE_NAME mlx5_ib
 #include <rdma/uverbs_named_ioctl.h>
@@ -159,6 +161,29 @@ static struct mlx5_roce *mlx5_get_rep_roce(struct mlx5_ib_dev *dev,
 	return NULL;
 }
 
+static bool mlx5_netdev_send_event(struct mlx5_ib_dev *dev,
+				   struct net_device *ndev,
+				   struct net_device *upper,
+				   struct mlx5_roce *roce)
+{
+	if (!dev->ib_active)
+		return false;
+
+	/* Event is about our upper device */
+	if (upper == ndev)
+		return true;
+
+	/* RDMA device not in lag and not in switchdev */
+	if (!dev->is_rep && !upper && ndev == roce->netdev)
+		return true;
+
+	/* RDMA device in switchdev */
+	if (dev->is_rep && ndev == roce->netdev)
+		return true;
+
+	return false;
+}
+
 static int mlx5_netdev_event(struct notifier_block *this,
 			     unsigned long event, void *ptr)
 {
@@ -195,21 +220,27 @@ static int mlx5_netdev_event(struct notifier_block *this,
 	case NETDEV_CHANGE:
 	case NETDEV_UP:
 	case NETDEV_DOWN: {
-		struct net_device *lag_ndev = mlx5_lag_get_roce_netdev(mdev);
 		struct net_device *upper = NULL;
 
-		if (lag_ndev) {
-			upper = netdev_master_upper_dev_get(lag_ndev);
-			dev_put(lag_ndev);
+		if (ibdev->lag_active) {
+			struct net_device *lag_ndev;
+
+			lag_ndev = mlx5_lag_get_netdev(mdev);
+			if (lag_ndev) {
+				upper = netdev_master_upper_dev_get(lag_ndev);
+				dev_put(lag_ndev);
+			} else {
+				goto done;
+			}
 		}
 
-		if (ibdev->is_rep)
+		if (ibdev->is_rep) {
 			roce = mlx5_get_rep_roce(ibdev, ndev, upper, &port_num);
-		if (!roce)
-			return NOTIFY_DONE;
-		if ((upper == ndev ||
-		     ((!upper || ibdev->is_rep) && ndev == roce->netdev)) &&
-		    ibdev->ib_active) {
+			if (!roce)
+				return NOTIFY_DONE;
+		}
+
+		if (mlx5_netdev_send_event(ibdev, ndev, upper, roce)) {
 			struct ib_event ibev = { };
 			enum ib_port_state port_state;
 
@@ -254,9 +285,11 @@ static struct net_device *mlx5_ib_get_netdev(struct ib_device *device,
 	if (!mdev)
 		return NULL;
 
-	ndev = mlx5_lag_get_roce_netdev(mdev);
-	if (ndev)
-		goto out;
+	if (!ibdev->is_rep && ibdev->lag_active) {
+		ndev = mlx5_lag_get_roce_netdev(mdev);
+		if (ndev)
+			goto out;
+	}
 
 	/* Ensure ndev does not disappear before we invoke dev_hold()
 	 */
@@ -564,9 +597,9 @@ out:
 	return err;
 }
 
-static int set_roce_addr(struct mlx5_ib_dev *dev, u32 port_num,
-			 unsigned int index, const union ib_gid *gid,
-			 const struct ib_gid_attr *attr)
+int set_roce_addr(struct mlx5_ib_dev *dev, u32 port_num,
+		  unsigned int index, const union ib_gid *gid,
+		  const struct ib_gid_attr *attr)
 {
 	enum ib_gid_type gid_type;
 	u16 vlan_id = 0xffff;
@@ -607,6 +640,12 @@ static int set_roce_addr(struct mlx5_ib_dev *dev, u32 port_num,
 static int mlx5_ib_add_gid(const struct ib_gid_attr *attr,
 			   __always_unused void **context)
 {
+	int ret;
+
+	ret = mlx5r_add_gid_macsec_operations(attr);
+	if (ret)
+		return ret;
+
 	return set_roce_addr(to_mdev(attr->device), attr->port_num,
 			     attr->index, &attr->gid, attr);
 }
@@ -614,8 +653,15 @@ static int mlx5_ib_add_gid(const struct ib_gid_attr *attr,
 static int mlx5_ib_del_gid(const struct ib_gid_attr *attr,
 			   __always_unused void **context)
 {
-	return set_roce_addr(to_mdev(attr->device), attr->port_num,
-			     attr->index, NULL, attr);
+	int ret;
+
+	ret = set_roce_addr(to_mdev(attr->device), attr->port_num,
+			    attr->index, NULL, attr);
+	if (ret)
+		return ret;
+
+	mlx5r_del_gid_macsec_operations(attr);
+	return 0;
 }
 
 __be16 mlx5_get_roce_udp_sport_min(const struct mlx5_ib_dev *dev,
@@ -3161,6 +3207,13 @@ static void mlx5_ib_unbind_slave_port(struct mlx5_ib_dev *ibdev,
 
 	lockdep_assert_held(&mlx5_ib_multiport_mutex);
 
+	mlx5_core_mp_event_replay(ibdev->mdev,
+				  MLX5_DRIVER_EVENT_AFFILIATION_REMOVED,
+				  NULL);
+	mlx5_core_mp_event_replay(mpi->mdev,
+				  MLX5_DRIVER_EVENT_AFFILIATION_REMOVED,
+				  NULL);
+
 	mlx5_ib_cleanup_cong_debugfs(ibdev, port_num);
 
 	spin_lock(&port->mp.mpi_lock);
@@ -3212,6 +3265,7 @@ static bool mlx5_ib_bind_slave_port(struct mlx5_ib_dev *ibdev,
 				    struct mlx5_ib_multiport_info *mpi)
 {
 	u32 port_num = mlx5_core_native_port_num(mpi->mdev) - 1;
+	u64 key;
 	int err;
 
 	lockdep_assert_held(&mlx5_ib_multiport_mutex);
@@ -3239,6 +3293,14 @@ static bool mlx5_ib_bind_slave_port(struct mlx5_ib_dev *ibdev,
 	mlx5_notifier_register(mpi->mdev, &mpi->mdev_events);
 
 	mlx5_ib_init_cong_debugfs(ibdev, port_num);
+
+	key = ibdev->ib_dev.index;
+	mlx5_core_mp_event_replay(mpi->mdev,
+				  MLX5_DRIVER_EVENT_AFFILIATION_DONE,
+				  &key);
+	mlx5_core_mp_event_replay(ibdev->mdev,
+				  MLX5_DRIVER_EVENT_AFFILIATION_DONE,
+				  &key);
 
 	return true;
 
@@ -3644,13 +3706,13 @@ static void mlx5_ib_stage_init_cleanup(struct mlx5_ib_dev *dev)
 	mutex_destroy(&dev->cap_mask_mutex);
 	WARN_ON(!xa_empty(&dev->sig_mrs));
 	WARN_ON(!bitmap_empty(dev->dm.memic_alloc_pages, MLX5_MAX_MEMIC_PAGES));
+	mlx5r_macsec_dealloc_gids(dev);
 }
 
 static int mlx5_ib_stage_init_init(struct mlx5_ib_dev *dev)
 {
 	struct mlx5_core_dev *mdev = dev->mdev;
-	int err;
-	int i;
+	int err, i;
 
 	dev->ib_dev.node_type = RDMA_NODE_IB_CA;
 	dev->ib_dev.local_dma_lkey = 0 /* not supported for now */;
@@ -3670,9 +3732,13 @@ static int mlx5_ib_stage_init_init(struct mlx5_ib_dev *dev)
 	if (err)
 		return err;
 
-	err = mlx5_ib_init_multiport_master(dev);
+	err = mlx5r_macsec_init_gids_and_devlist(dev);
 	if (err)
 		return err;
+
+	err = mlx5_ib_init_multiport_master(dev);
+	if (err)
+		goto err;
 
 	err = set_has_smi_cap(dev);
 	if (err)
@@ -3697,7 +3763,8 @@ static int mlx5_ib_stage_init_init(struct mlx5_ib_dev *dev)
 	spin_lock_init(&dev->dm.lock);
 	dev->dm.dev = mdev;
 	return 0;
-
+err:
+	mlx5r_macsec_dealloc_gids(dev);
 err_mp:
 	mlx5_ib_cleanup_multiport_master(dev);
 	return err;
@@ -4106,11 +4173,15 @@ static int mlx5_ib_stage_dev_notifier_init(struct mlx5_ib_dev *dev)
 {
 	dev->mdev_events.notifier_call = mlx5_ib_event;
 	mlx5_notifier_register(dev->mdev, &dev->mdev_events);
+
+	mlx5r_macsec_event_register(dev);
+
 	return 0;
 }
 
 static void mlx5_ib_stage_dev_notifier_cleanup(struct mlx5_ib_dev *dev)
 {
+	mlx5r_macsec_event_unregister(dev);
 	mlx5_notifier_unregister(dev->mdev, &dev->mdev_events);
 }
 
