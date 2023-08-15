@@ -415,6 +415,11 @@ static void tcf_ct_flow_table_process_conn(struct tcf_ct_flow_table *ct_ft,
 {
 	bool tcp = false, bidirectional = true;
 
+	if ((ctinfo != IP_CT_ESTABLISHED && ctinfo != IP_CT_ESTABLISHED_REPLY) ||
+	    !test_bit(IPS_ASSURED_BIT, &ct->status))
+		return;
+
+
 	switch (nf_ct_protonum(ct)) {
 	case IPPROTO_TCP:
 		if ((ctinfo != IP_CT_ESTABLISHED &&
@@ -635,21 +640,6 @@ static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
 	dir = tuplehash->tuple.dir;
 	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
 	ct = flow->ct;
-
-	if (dir == FLOW_OFFLOAD_DIR_REPLY &&
-	    !test_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags)) {
-		/* Only offload reply direction after connection became
-		 * assured.
-		 */
-		if (test_bit(IPS_ASSURED_BIT, &ct->status))
-			set_bit(NF_FLOW_HW_BIDIRECTIONAL, &flow->flags);
-		else if (test_bit(NF_FLOW_HW_ESTABLISHED, &flow->flags))
-			/* If flow_table flow has already been updated to the
-			 * established state, then don't refresh.
-			 */
-			return false;
-		force_refresh = true;
-	}
 
 	if (tcph && (unlikely(tcph->fin || tcph->rst))) {
 		flow_offload_teardown(flow);
