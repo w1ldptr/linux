@@ -4061,22 +4061,32 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		 struct flow_action *flow_action)
 {
 	struct netlink_ext_ack *extack = parse_state->extack;
+	struct mlx5e_tc_flow_action flow_action_reorder;
 	struct mlx5e_tc_flow *flow = parse_state->flow;
 	struct mlx5e_tc_jump_state jump_state = {};
 	struct mlx5_flow_attr *attr = flow->attr;
 	enum mlx5_flow_namespace_type ns_type;
 	struct mlx5e_priv *priv = flow->priv;
+	struct flow_action_entry *act, **_act;
 	struct mlx5_flow_attr *prev_attr;
-	struct flow_action_entry *act;
 	struct mlx5e_tc_act *tc_act;
 	int err, i, i_split = 0;
 	bool is_missable;
 
+	flow_action_reorder.num_entries = flow_action->num_entries;
+	flow_action_reorder.entries = kcalloc(flow_action->num_entries,
+					      sizeof(flow_action), GFP_KERNEL);
+	if (!flow_action_reorder.entries)
+		return -ENOMEM;
+
+	mlx5e_tc_act_reorder_flow_actions(flow_action, &flow_action_reorder);
+
 	ns_type = mlx5e_get_flow_namespace(flow);
 	list_add(&attr->list, &flow->attrs);
 
-	flow_action_for_each(i, act, flow_action) {
+	flow_action_for_each(i, _act, &flow_action_reorder) {
 		jump_state.jump_target = false;
+		act = *_act;
 		is_missable = false;
 		prev_attr = attr;
 
@@ -4084,23 +4094,23 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		if (!tc_act) {
 			NL_SET_ERR_MSG_MOD(extack, "Not implemented offload action");
 			err = -EOPNOTSUPP;
-			goto out_free_post_acts;
+			goto out_free;
 		}
 
 		if (tc_act->can_offload && !tc_act->can_offload(parse_state, act, i, attr)) {
 			err = -EOPNOTSUPP;
-			goto out_free_post_acts;
+			goto out_free;
 		}
 
 		err = tc_act->parse_action(parse_state, act, priv, attr);
 		if (err)
-			goto out_free_post_acts;
+			goto out_free;
 
 		dec_jump_count(act, tc_act, attr, priv, &jump_state);
 
 		err = parse_branch_ctrl(act, tc_act, flow, attr, &jump_state, extack);
 		if (err)
-			goto out_free_post_acts;
+			goto out_free;
 
 		parse_state->actions |= attr->action;
 
@@ -4108,18 +4118,18 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		if (jump_state.jump_target ||
 		    (tc_act->is_multi_table_act &&
 		    tc_act->is_multi_table_act(priv, act, attr) &&
-		    i < flow_action->num_entries - 1)) {
+		    i < flow_action_reorder.num_entries - 1)) {
 			is_missable = tc_act->is_missable ? tc_act->is_missable(act) : false;
 
 			err = mlx5e_tc_act_post_parse(parse_state, flow_action, i_split, i, attr,
 						      ns_type);
 			if (err)
-				goto out_free_post_acts;
+				goto out_free;
 
 			attr = mlx5e_clone_flow_attr_for_post_act(flow->attr, ns_type);
 			if (!attr) {
 				err = -ENOMEM;
-				goto out_free_post_acts;
+				goto out_free;
 			}
 
 			i_split = i + 1;
@@ -4137,6 +4147,8 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 		}
 	}
 
+	kfree(flow_action_reorder.entries);
+
 	err = mlx5e_tc_act_post_parse(parse_state, flow_action, i_split, i, attr, ns_type);
 	if (err)
 		goto out_free_post_acts;
@@ -4147,6 +4159,8 @@ parse_tc_actions(struct mlx5e_tc_act_parse_state *parse_state,
 
 	return 0;
 
+out_free:
+	kfree(flow_action_reorder.entries);
 out_free_post_acts:
 	free_flow_post_acts(flow);
 
