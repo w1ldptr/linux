@@ -249,10 +249,8 @@ static int tcf_ct_flow_table_fill_actions(struct net *net,
 	switch (tdir) {
 	case FLOW_OFFLOAD_DIR_ORIGINAL:
 		dir = IP_CT_DIR_ORIGINAL;
-		ctinfo = test_bit(IPS_SEEN_REPLY_BIT, &ct->status) ?
-			IP_CT_ESTABLISHED : IP_CT_NEW;
-		if (ctinfo == IP_CT_ESTABLISHED)
-			set_bit(NF_FLOW_HW_ESTABLISHED, &flow->flags);
+		ctinfo = IP_CT_ESTABLISHED;
+		set_bit(NF_FLOW_HW_ESTABLISHED, &flow->flags);
 		break;
 	case FLOW_OFFLOAD_DIR_REPLY:
 		dir = IP_CT_DIR_REPLY;
