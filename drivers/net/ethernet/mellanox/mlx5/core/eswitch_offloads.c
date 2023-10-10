@@ -3693,6 +3693,21 @@ void mlx5_eswitch_unblock_mode(struct mlx5_core_dev *dev)
 	up_write(&esw->mode_lock);
 }
 
+bool mlx5_eswitch_mode_is_blocked(struct mlx5_core_dev *dev)
+{
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+	bool blocked;
+
+	if (!mlx5_esw_allowed(esw))
+		return false;
+
+	down_write(&esw->mode_lock);
+	blocked = esw->offloads.num_block_mode;
+	up_write(&esw->mode_lock);
+
+	return blocked;
+}
+
 int mlx5_devlink_eswitch_mode_set(struct devlink *devlink, u16 mode,
 				  struct netlink_ext_ack *extack)
 {
