@@ -1202,6 +1202,36 @@ static inline void memcpy_toio(volatile void __iomem *addr, const void *buffer,
 }
 #endif
 
+#ifndef memcpy_toio_64
+#define memcpy_toio_64 memcpy_toio_64
+/**
+ * memcpy_toio_64	Copy 64 bytes of data into I/O memory
+ * @dst:		The (I/O memory) destination for the copy
+ * @src:		The (RAM) source for the data
+ * @count:		The number of bytes to copy
+ *
+ * dst and src must be aligned to 8 bytes. This operation copies exactly 64
+ * bytes. It is intended to be used for write combining IO memory. The
+ * architecture should provide an implementation that has a high chance of
+ * generating a single combined transaction.
+ */
+static inline void memcpy_toio_64(volatile void __iomem *addr,
+				  const void *buffer)
+{
+	unsigned int i = 0;
+
+#if BITS_PER_LONG == 64
+	for (; i != 8; i++)
+		__raw_writeq(((const u64 *)buffer)[i],
+			     ((u64 __iomem *)addr) + i);
+#else
+	for (; i != 16; i++)
+		__raw_writel(((const u32 *)buffer)[i],
+			     ((u32 __iomem *)addr) + i);
+#endif
+}
+#endif
+
 extern int devmem_is_allowed(unsigned long pfn);
 
 #endif /* __KERNEL__ */

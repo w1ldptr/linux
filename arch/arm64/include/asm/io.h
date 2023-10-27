@@ -135,6 +135,26 @@ extern void __memset_io(volatile void __iomem *, int, size_t);
 #define memcpy_fromio(a,c,l)	__memcpy_fromio((a),(c),(l))
 #define memcpy_toio(c,a,l)	__memcpy_toio((c),(a),(l))
 
+static inline void __memcpy_toio_64(volatile void __iomem *to, const void *from)
+{
+	const u64 *from64 = from;
+
+	/*
+	 * Newer ARM core have sensitive write combining buffers, it is
+	 * important that the stores be contiguous blocks of store instructions.
+	 * Normal memcpy does not work reliably.
+	 */
+	asm volatile("stp %x0, %x1, [%8, #16 * 0]\n"
+		     "stp %x2, %x3, [%8, #16 * 1]\n"
+		     "stp %x4, %x5, [%8, #16 * 2]\n"
+		     "stp %x6, %x7, [%8, #16 * 3]\n"
+		     :
+		     : "rZ"(from64[0]), "rZ"(from64[1]), "rZ"(from64[2]),
+		       "rZ"(from64[3]), "rZ"(from64[4]), "rZ"(from64[5]),
+		       "rZ"(from64[6]), "rZ"(from64[7]), "r"(to));
+}
+#define memcpy_toio_64(to, from) __memcpy_toio_64(to, from)
+
 /*
  * I/O memory mapping functions.
  */
