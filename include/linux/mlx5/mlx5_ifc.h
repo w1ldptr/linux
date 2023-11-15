@@ -621,7 +621,7 @@ struct mlx5_ifc_fte_match_set_misc_bits {
 
 	u8         reserved_at_140[0x8];
 	u8         bth_dst_qp[0x18];
-	u8	   reserved_at_160[0x20];
+	u8	   inner_esp_spi[0x20];
 	u8	   outer_esp_spi[0x20];
 	u8         reserved_at_1a0[0x60];
 };
@@ -1193,7 +1193,8 @@ struct mlx5_ifc_device_mem_cap_bits {
 	u8         log_sw_icm_alloc_granularity[0x6];
 	u8         log_steering_sw_icm_size[0x8];
 
-	u8         reserved_at_120[0x18];
+	u8         log_indirect_encap_sw_icm_size[0x8];
+	u8         reserved_at_128[0x10];
 	u8         log_header_modify_pattern_sw_icm_size[0x8];
 
 	u8         header_modify_sw_icm_start_address[0x40];
@@ -1204,7 +1205,11 @@ struct mlx5_ifc_device_mem_cap_bits {
 
 	u8         memic_operations[0x20];
 
-	u8         reserved_at_220[0x5e0];
+	u8         reserved_at_220[0x20];
+
+	u8         indirect_encap_sw_icm_start_address[0x40];
+
+	u8         reserved_at_280[0x580];
 };
 
 struct mlx5_ifc_device_event_cap_bits {
@@ -11999,6 +12004,13 @@ enum {
 	MLX5_IPSEC_ASO_MODE              = 0x0,
 	MLX5_IPSEC_ASO_REPLAY_PROTECTION = 0x1,
 	MLX5_IPSEC_ASO_INC_SN            = 0x2,
+};
+
+enum {
+	MLX5_IPSEC_ASO_REPLAY_WIN_32BIT  = 0x0,
+	MLX5_IPSEC_ASO_REPLAY_WIN_64BIT  = 0x1,
+	MLX5_IPSEC_ASO_REPLAY_WIN_128BIT = 0x2,
+	MLX5_IPSEC_ASO_REPLAY_WIN_256BIT = 0x3,
 };
 
 struct mlx5_ifc_ipsec_aso_bits {

@@ -1119,7 +1119,7 @@ struct mlx5_ib_dev {
 	/* serialize update of capability mask
 	 */
 	struct mutex			cap_mask_mutex;
-	u8				ib_active:1;
+	bool				ib_active;
 	u8				is_rep:1;
 	u8				lag_active:1;
 	u8				wc_support:1;
@@ -1672,7 +1672,7 @@ static inline bool rt_supported(int ts_cap)
 static inline bool mlx5_umem_needs_ats(struct mlx5_ib_dev *dev,
 				       struct ib_umem *umem, int access_flags)
 {
-	if (!MLX5_CAP_GEN(dev->mdev, ats) || !umem->is_dmabuf)
+	if (!MLX5_CAP_GEN(dev->mdev, ats) || (!umem->is_dmabuf && !umem->is_peer))
 		return false;
 	return access_flags & IB_ACCESS_RELAXED_ORDERING;
 }

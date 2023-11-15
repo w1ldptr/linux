@@ -161,6 +161,29 @@ static struct mlx5_roce *mlx5_get_rep_roce(struct mlx5_ib_dev *dev,
 	return NULL;
 }
 
+static bool mlx5_netdev_send_event(struct mlx5_ib_dev *dev,
+				   struct net_device *ndev,
+				   struct net_device *upper,
+				   struct mlx5_roce *roce)
+{
+	if (!dev->ib_active)
+		return false;
+
+	/* Event is about our upper device */
+	if (upper == ndev)
+		return true;
+
+	/* RDMA device not in lag and not in switchdev */
+	if (!dev->is_rep && !upper && ndev == roce->netdev)
+		return true;
+
+	/* RDMA device in switchdev */
+	if (dev->is_rep && ndev == roce->netdev)
+		return true;
+
+	return false;
+}
+
 static int mlx5_netdev_event(struct notifier_block *this,
 			     unsigned long event, void *ptr)
 {
@@ -197,21 +220,27 @@ static int mlx5_netdev_event(struct notifier_block *this,
 	case NETDEV_CHANGE:
 	case NETDEV_UP:
 	case NETDEV_DOWN: {
-		struct net_device *lag_ndev = mlx5_lag_get_roce_netdev(mdev);
 		struct net_device *upper = NULL;
 
-		if (lag_ndev) {
-			upper = netdev_master_upper_dev_get(lag_ndev);
-			dev_put(lag_ndev);
+		if (ibdev->lag_active) {
+			struct net_device *lag_ndev;
+
+			lag_ndev = mlx5_lag_get_netdev(mdev);
+			if (lag_ndev) {
+				upper = netdev_master_upper_dev_get(lag_ndev);
+				dev_put(lag_ndev);
+			} else {
+				goto done;
+			}
 		}
 
-		if (ibdev->is_rep)
+		if (ibdev->is_rep) {
 			roce = mlx5_get_rep_roce(ibdev, ndev, upper, &port_num);
-		if (!roce)
-			return NOTIFY_DONE;
-		if ((upper == ndev ||
-		     ((!upper || ibdev->is_rep) && ndev == roce->netdev)) &&
-		    ibdev->ib_active) {
+			if (!roce)
+				return NOTIFY_DONE;
+		}
+
+		if (mlx5_netdev_send_event(ibdev, ndev, upper, roce)) {
 			struct ib_event ibev = { };
 			enum ib_port_state port_state;
 
@@ -256,9 +285,11 @@ static struct net_device *mlx5_ib_get_netdev(struct ib_device *device,
 	if (!mdev)
 		return NULL;
 
-	ndev = mlx5_lag_get_roce_netdev(mdev);
-	if (ndev)
-		goto out;
+	if (!ibdev->is_rep && ibdev->lag_active) {
+		ndev = mlx5_lag_get_roce_netdev(mdev);
+		if (ndev)
+			goto out;
+	}
 
 	/* Ensure ndev does not disappear before we invoke dev_hold()
 	 */
@@ -818,6 +849,17 @@ static int mlx5_query_node_desc(struct mlx5_ib_dev *dev, char *node_desc)
 				    MLX5_REG_NODE_DESC, 0, 0);
 }
 
+static void fill_esw_mgr_reg_c0(struct mlx5_core_dev *mdev,
+				struct mlx5_ib_query_device_resp *resp)
+{
+	struct mlx5_eswitch *esw = mdev->priv.eswitch;
+	u16 vport = mlx5_eswitch_manager_vport(mdev);
+
+	resp->reg_c0.value = mlx5_eswitch_get_vport_metadata_for_match(esw,
+								      vport);
+	resp->reg_c0.mask = mlx5_eswitch_get_vport_metadata_mask();
+}
+
 static int mlx5_ib_query_device(struct ib_device *ibdev,
 				struct ib_device_attr *props,
 				struct ib_udata *uhw)
@@ -1207,6 +1249,19 @@ static int mlx5_ib_query_device(struct ib_device *ibdev,
 
 		resp.dci_streams_caps.max_log_num_errored =
 			MLX5_CAP_GEN(mdev, log_max_dci_errored_streams);
+	}
+
+	if (offsetofend(typeof(resp), reserved) <= uhw_outlen)
+		resp.response_length += sizeof(resp.reserved);
+
+	if (offsetofend(typeof(resp), reg_c0) <= uhw_outlen) {
+		struct mlx5_eswitch *esw = mdev->priv.eswitch;
+
+		resp.response_length += sizeof(resp.reg_c0);
+
+		if (mlx5_eswitch_mode(mdev) == MLX5_ESWITCH_OFFLOADS &&
+		    mlx5_eswitch_vport_match_metadata_enabled(esw))
+			fill_esw_mgr_reg_c0(mdev, &resp);
 	}
 
 	if (uhw_outlen) {
